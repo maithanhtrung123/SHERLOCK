@@ -320,7 +320,7 @@
   function hideFloat() { fl.hidden = true; pending = null; document.querySelectorAll("p.sel").forEach((x) => x.classList.remove("sel")); }
   function hideFloatIfTap() { if (pending && !pending.word) hideFloat(); }
   function showFloat(rect, withSave) {
-    $("fSave").hidden = !withSave;
+    $("fSave").hidden = !withSave; $("fAsk").hidden = !withSave;
     fl.hidden = false;
     const w = fl.offsetWidth, h = fl.offsetHeight;
     let x = rect.left + rect.width / 2 - w / 2 + window.scrollX;
@@ -385,6 +385,66 @@
     openSaveDialog({ word, sentence, paragraph, s: cur, p: +p.dataset.p, off: start, path: pathText(book.sections[cur]) }, dup);
     hideFloat();
     window.getSelection().removeAllRanges();
+  };
+
+  // ---------- ask AI about selected text ----------
+  let ask = null;   // {word, sentence, paragraph, path, msgs, ctx}
+  $("fAsk").onclick = () => {
+    if (!pending || !pending.word) return;
+    const { p, word, start, end } = pending;
+    const text = textOf(p);
+    ask = { word, start, sentence: sentenceAround(text, start, end), paragraph: text.replace(/\s+/g, " ").trim(), s: cur, p: +p.dataset.p, path: pathText(book.sections[cur]), msgs: [] };
+    hideFloat(); window.getSelection().removeAllRanges();
+    $("askQuote").innerHTML = esc(ask.sentence).replace(esc(word), `<mark>${esc(word)}</mark>`) + `<cite>${esc(ask.path)}</cite>`;
+    $("askLog").innerHTML = aiReady() ? "" : `<p class="hint">To ask questions, add your AI key first (DeepSeek, Gemini, Claude or OpenAI). <button class="link" data-ai-setup>✨ Set up AI helper</button></p>`;
+    $("askInput").value = "";
+    $("askQuick").hidden = false;
+    $("dlgAsk").showModal();
+    if (aiReady()) setTimeout(() => $("askInput").focus(), 50);
+  };
+  function askSend(q) {
+    q = (q || "").trim();
+    if (!q || !ask) return;
+    if (!aiReady()) { openAISetup(); return; }
+    if (!ask.msgs.length) {
+      q = `I am reading Sherlock Holmes to learn English (my first language: ${langName()}). Selected text: "${ask.word}"
+Sentence: "${ask.sentence}"
+Paragraph: "${ask.paragraph.slice(0, 1500)}"
+(${ask.path})
+
+My question: ${q}
+
+Answer clearly and briefly for a learner (under 150 words unless I ask for more). Use simple English; add ${langName()} where it helps.`;
+    }
+    const shown = ask.msgs.length ? q : q.split("My question: ")[1].split("\n\nAnswer clearly")[0];
+    ask.msgs.push({ role: "user", content: q });
+    const log = $("askLog");
+    log.insertAdjacentHTML("beforeend", `<div class="msg me">${esc(shown)}</div><div class="msg ai busy">✨ Thinking…</div>`);
+    const bubble = log.lastElementChild;
+    bubble.scrollIntoView({ block: "nearest" });
+    $("askQuick").hidden = true; $("askInput").value = ""; $("askSend").disabled = true;
+    const mine = ask;
+    askAIMsgs(ask.msgs).then((t) => {
+      mine.msgs.push({ role: "assistant", content: t });
+      bubble.classList.remove("busy"); bubble.innerHTML = fmtAI(t);
+    }).catch((e) => {
+      mine.msgs.pop();
+      bubble.classList.remove("busy"); bubble.classList.add("err"); bubble.textContent = "AI helper error: " + e.message;
+    }).finally(() => { $("askSend").disabled = false; bubble.scrollIntoView({ block: "nearest" }); });
+  }
+  $("askForm").addEventListener("submit", (e) => { e.preventDefault(); askSend($("askInput").value); });
+  $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askSend($("askInput").value); } });
+  $("dlgAsk").addEventListener("click", (e) => {
+    const t = e.target;
+    if (t === $("dlgAsk") || t.matches("[data-close-ask]")) $("dlgAsk").close();
+    else if (t.matches("[data-q]")) askSend(t.dataset.q);
+    else if (t.matches("[data-ai-setup]")) openAISetup();
+  });
+  $("askSaveWord").onclick = () => {
+    if (!ask) return;
+    const dup = db.vocab.find((v) => v.word.toLowerCase() === ask.word.toLowerCase());
+    $("dlgAsk").close();
+    openSaveDialog({ word: ask.word, sentence: ask.sentence, paragraph: ask.paragraph, s: ask.s, p: ask.p, off: ask.start, path: ask.path }, dup);
   };
 
   // ---------- save dialog ----------
@@ -1246,20 +1306,22 @@
   }
   const aiReady = () => !!(db.settings.ai && db.settings.ai.key);
   const AI_DEFAULT_MODEL = { deepseek: "deepseek-chat", gemini: "gemini-2.5-flash", claude: "claude-opus-5-5", openai: "gpt-4o-mini" };
-  async function askAI(prompt, json) {
+  const askAI = (prompt, json) => askAIMsgs([{ role: "user", content: prompt }], json);
+  // msgs: [{role: "user"|"assistant", content}]
+  async function askAIMsgs(msgs, json) {
     const { provider, key } = db.settings.ai, model = db.settings.ai.model || AI_DEFAULT_MODEL[provider];
     let text = "";
     if (provider === "gemini") {
       const j = await getJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: json ? { responseMimeType: "application/json" } : {} }),
+        body: JSON.stringify({ contents: msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })), generationConfig: json ? { responseMimeType: "application/json" } : {} }),
       });
       text = (((j.candidates || [])[0] || {}).content || { parts: [] }).parts.map((p) => p.text || "").join("");
     } else if (provider === "claude") {
       const j = await getJSON("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({ model, max_tokens: 2000, output_config: { effort: "low" }, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model, max_tokens: 2000, output_config: { effort: "low" }, messages: msgs }),
       });
       if (j.stop_reason === "refusal") throw new Error("The AI declined this request");
       text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
@@ -1268,7 +1330,7 @@
       const url = provider === "deepseek" ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions";
       const j = await getJSON(url, {
         method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key },
-        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], ...(json ? { response_format: { type: "json_object" } } : {}) }),
+        body: JSON.stringify({ model, messages: msgs, ...(json ? { response_format: { type: "json_object" } } : {}) }),
       });
       text = ((j.choices || [])[0] || { message: {} }).message.content || "";
     }
@@ -1285,24 +1347,55 @@ Sentence: "${v.sentence}"
 Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple English, max 15 words", "pos": "part of speech", "translation": "${langName()} translation of the word as used here", "example": "one short modern example sentence using it", "tip": "one short tip, e.g. whether it is old-fashioned, in ${langName()}"}`, true);
   }
   // Fill in a meaning automatically (AI if set up, otherwise free dictionary + translation).
+  const POS_SHORT = { adjective: "adj", noun: "noun", verb: "verb", adverb: "adv", preposition: "prep", conjunction: "conj", pronoun: "pron", interjection: "interj", phrase: "phrase", idiom: "idiom", "phrasal verb": "phrasal verb", determiner: "det" };
+  const posShort = (p) => { if (!p) return ""; const k = p.toLowerCase().trim(); return POS_SHORT[k] || Object.entries(POS_SHORT).find(([l]) => k.startsWith(l))?.[1] || k.split(/[ ,(/]/)[0]; };
+  // Meaning: AI first when it is set up; otherwise (or if AI fails) the free dictionary.
   async function enrich(v, force) {
-    if (v._busy || (!force && v.meaning && v.vi)) return;
+    if (v._busy) return;
+    const wantAI = aiReady() && (force || (v.meaningSrc !== "ai" && !v.aiTried));
+    if (!wantAI && v.meaning && v.vi) return;
     v._busy = true;
     try {
-      if (aiReady() && (force || !v.meaning)) {
+      if (wantAI) {
+        v.aiTried = true;
         try {
           const r = await aiMeaning(v);
           v.meaning = r.meaning || v.meaning; v.pos = r.pos || v.pos; v.vi = r.translation || v.vi;
-          v.example = r.example || v.example; v.tip = r.tip || ""; v.meaningSrc = "ai";
-        } catch (e) { toast("AI helper: " + e.message); }
+          v.example = r.example || v.example; v.tip = r.tip || ""; v.meaningSrc = "ai"; v.grammar = "";
+        } catch (e) { toast("AI helper: " + e.message + " – using the dictionary"); }
       }
-      if (!v.defs && !v.meaning) {
-        const d = await dictLookup(v.word);
-        if (d) { v.defs = d.defs; v.ipa = d.ipa; }
+      if (!v.meaning) {
+        if (!v.defs) { const d = await dictLookup(v.word); if (d) { v.defs = d.defs; v.ipa = v.ipa || d.ipa; } }
+        if (v.defs && v.defs.length) { v.meaning = v.defs[0].def; v.pos = v.pos || v.defs[0].pos; v.example = v.example || v.defs[0].ex || ""; v.meaningSrc = "dict"; }
       }
       if (!v.vi) v.vi = await translate(v.word);
       save();
     } finally { delete v._busy; }
+  }
+  // Grammar note for the word as used in its sentence (AI), or a short general note (no AI).
+  const POS_INFO = {
+    adj: "Adjective (tính từ): describes a noun – e.g. a <i>weak</i> man. Usually before a noun or after be/seem/become.",
+    noun: "Noun (danh từ): a person, thing or idea. Can be singular/plural and follow a/the/my.",
+    verb: "Verb (động từ): an action or state. Changes form for tense: go / went / gone / going.",
+    adv: "Adverb (trạng từ): describes how/when/where – often ends in -ly (quickly).",
+    prep: "Preposition (giới từ): shows place, time or relation – in, on, at, upon.",
+    conj: "Conjunction (liên từ): joins words or clauses – and, but, nor, though.",
+    pron: "Pronoun (đại từ): stands for a noun – he, she, it, whom.",
+    phrase: "Phrase / idiom (cụm từ): several words used together with one meaning – learn it as a whole.",
+    idiom: "Idiom (thành ngữ): the meaning is not the sum of the words – learn it as a whole.",
+  };
+  async function grammarFor(v) {
+    if (v.grammar) return v.grammar;
+    if (!aiReady()) return POS_INFO[posShort(v.pos)] || "Turn on ✨ AI helper to get a grammar explanation for this word in its sentence.";
+    const g = await askAI(`Explain the grammar of "${v.word}" in this sentence from Sherlock Holmes: "${v.sentence}".
+For an English learner (first language ${langName()}). Use short bullet points:
+- part of speech here and its job in the sentence (what it describes/modifies)
+- its other word forms (e.g. noun/verb/adj/adv forms, plural or past tense)
+- one common pattern or collocation with it
+- a ${langName()} note in one line
+Keep it under 90 words.`);
+    v.grammar = g; save();
+    return g;
   }
 
   // ----- the learn/review window -----
@@ -1347,11 +1440,12 @@ Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple E
   const say = (t) => `<button class="btn small say" data-say="${esc(t)}" title="Listen">🔊</button>`;
   function meaningBlock(v) {
     let h = "";
-    if (v.meaning) h += `<div class="rv-mean"><b>Meaning:</b> ${esc(v.meaning)}${v.meaningSrc === "ai" ? ' <span class="tag">AI</span>' : ""}</div>`;
-    else if (v.defs && v.defs.length) {
-      h += `<div class="rv-mean"><b>Which meaning fits the sentence?</b> <span class="hint">Tap one</span>` +
-        v.defs.map((d, i) => `<button class="def" data-def="${i}"><i>${esc(d.pos)}</i> ${esc(d.def)}</button>`).join("") + `</div>`;
-    } else if (v._busy) h += `<div class="rv-mean hint">Looking up the meaning…</div>`;
+    if (v.meaning) {
+      h += `<div class="rv-mean"><b>Meaning:</b> ${esc(v.meaning)} <span class="tag">${v.meaningSrc === "ai" ? "AI" : v.meaningSrc === "dict" ? "dictionary" : "mine"}</span></div>`;
+      if (v.meaningSrc === "dict" && v.defs && v.defs.length > 1)
+        h += `<details class="others"><summary>Not the right meaning? Choose another</summary>` + v.defs.map((d, i) => `<button class="def" data-def="${i}"><i>${esc(posShort(d.pos))}</i> ${esc(d.def)}</button>`).join("") + `</details>`;
+    } else if (v._busy) h += `<div class="rv-mean hint">${aiReady() ? "✨ AI is writing the meaning…" : "Looking up the meaning…"}</div>`;
+    else h += `<div class="rv-mean hint">No meaning found. ${aiReady() ? "" : "Write it in your note, or turn on ✨ AI helper."}</div>`;
     if (v.vi) h += `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>`;
     if (v.example) h += `<div class="rv-ex">e.g. <i>${esc(v.example)}</i></div>`;
     if (v.tip) h += `<div class="rv-ex">💡 ${esc(v.tip)}</div>`;
@@ -1373,7 +1467,9 @@ Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple E
     const v = c.v;
     if (c.kind === "learn") {
       body.innerHTML = `<div class="rv-card"><div class="rv-tag">📖 New word · ${esc(v.path)}</div>
+        ${v.pos ? `<button class="pos" data-grammar title="Tap for grammar">${esc(posShort(v.pos))} ⓘ</button>` : ""}
         <div class="rv-word">${esc(v.word)} ${say(v.word)} ${v.ipa ? `<span class="ipa">${esc(v.ipa)}</span>` : ""}</div>
+        <div class="grammar" id="grammarOut"></div>
         <blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>
         ${meaningBlock(v)}
         <div class="rv-ai">${aiReady() ? `<button class="btn small" data-ai-explain>✨ Ask AI to explain</button>` : `<button class="link" data-ai-setup>✨ Turn on the AI helper for better explanations</button>`}<div class="ai-out" id="aiOut"></div></div></div>`;
@@ -1450,10 +1546,14 @@ Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple E
     if (vv) u.voice = vv; u.lang = vv ? vv.lang : "en-GB"; u.rate = Math.min(1, db.settings.rate);
     synth.speak(u);
   }
+  // tiny markdown for AI answers: **bold**, bullet lines, line breaks (text is escaped first)
+  function fmtAI(t) {
+    return esc(t).replace(/^#+\s*(.+)$/gm, "<b>$1</b>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^\s*[-*•]\s+/gm, "• ").replace(/\n/g, "<br>");
+  }
   async function aiInto(promise) {
     const out = $("aiOut"); if (!out) return;
     out.textContent = "✨ Thinking…";
-    try { const t = await promise; out.innerHTML = esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>"); }
+    try { out.innerHTML = fmtAI(await promise); }
     catch (e) { out.textContent = "AI helper error: " + e.message + ". Check your key in ✨ AI helper."; }
   }
   $("dlgReview").addEventListener("click", (e) => {
@@ -1461,6 +1561,12 @@ Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple E
     const c = rv.queue[rv.i], v = c && c.v;
     if (t.dataset.say) sayText(t.dataset.say);
     else if (t.matches("[data-close-review]")) $("dlgReview").close();
+    else if (t.matches("[data-grammar]")) {
+      const out = $("grammarOut"); if (!out) return;
+      if (out.innerHTML) { out.innerHTML = ""; return; }
+      out.textContent = aiReady() ? "✨ Thinking…" : "";
+      grammarFor(v).then((g) => { out.innerHTML = fmtAI(g); }).catch((e) => { out.textContent = "AI helper error: " + e.message; });
+    }
     else if (t.matches("[data-learned]")) {
       v.learned = true; v.learnedAt = Date.now();
       Object.assign(srsOf(v), { due: nextMorning(), ivl: 0, reps: 0 });
@@ -1509,6 +1615,7 @@ Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple E
     $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; $("aiTest").textContent = "";
     const d = $("dlgAI"); if (d.showModal) d.showModal(); else d.setAttribute("open", "");
   }
+  $("dlgAI").addEventListener("close", () => { if ($("dlgAsk").open && aiReady() && !ask.msgs.length) { $("askLog").innerHTML = ""; $("askInput").focus(); } });
   $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && rv.queue[rv.i].kind === "learn") showCard(); });
   $("aiProvider").onchange = () => { $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; };
   $("btnAISetup").onclick = openAISetup;

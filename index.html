@@ -55,6 +55,7 @@
 <!-- floating toolbar shown on selection / tap -->
 <div id="float" class="float" hidden>
   <button id="fSave" class="fbtn primary">＋ Save word</button>
+  <button id="fAsk" class="fbtn">✨ Ask AI</button>
   <button id="fRead" class="fbtn">🔊 Read from here</button>
   <button id="fMark" class="fbtn">🔖 Bookmark here</button>
 </div>
@@ -166,6 +167,23 @@
     <p id="aiTest" class="hint"></p>
     <div class="row"><button value="cancel" class="btn" formnovalidate>Close</button><button type="button" class="btn primary" id="aiSave">Save &amp; test</button></div>
   </form>
+</dialog>
+
+<dialog id="dlgAsk" class="dlg ask">
+  <div class="rv-top"><h3>✨ Ask AI</h3><button class="x" data-close-ask aria-label="Close">×</button></div>
+  <blockquote id="askQuote" class="ask-quote"></blockquote>
+  <div id="askLog" class="ask-log"></div>
+  <div class="ask-quick" id="askQuick">
+    <button type="button" class="chip" data-q="What does this mean here?">What does it mean?</button>
+    <button type="button" class="chip" data-q="Explain the grammar of this part of the sentence.">Explain the grammar</button>
+    <button type="button" class="chip" data-q="Translate this sentence into my language and explain any difficult words.">Translate</button>
+    <button type="button" class="chip" data-q="Rewrite this sentence in simple modern English.">Say it simply</button>
+  </div>
+  <form id="askForm" class="ask-form">
+    <textarea id="askInput" rows="2" placeholder="Type your question… (any language)"></textarea>
+    <button class="btn primary" id="askSend">Send</button>
+  </form>
+  <div class="ask-foot"><button type="button" class="link" id="askSaveWord">＋ Save this as a word</button></div>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
