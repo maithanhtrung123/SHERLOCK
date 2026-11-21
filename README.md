@@ -6,6 +6,7 @@ A simple, Word-style web app for reading **The Complete Sherlock Holmes** and le
 - **Never lose your place**: the app remembers where you stopped and opens there next time. Tap any line and choose **Bookmark here** to keep extra bookmarks.
 - **Save new words with their sentence**: select a word or phrase (double-click on a computer, press and hold on a phone) and tap **＋ Save word**. The whole sentence is saved with it, and you can switch to the whole paragraph or add your own note.
 - **Export for AI**: in *Vocabulary*, tap **Export for AI** to download a Markdown file (or **Copy for AI** to copy it). It already contains instructions asking the AI to explain each word as used in its sentence, translate it, and give examples. Paste or upload it to any AI chat.
+- **Listen**: tap *Listen* (or tap a line → *Read from here*). The narrator, Holmes, Watson, women and other characters each get their own voice, with the sentence highlighted as it is read. Change voices and speed in *Voices*. Uses the voices built into your device/browser.
 - **Your data stays on your device** (browser storage). Use *Back up all data* / *Restore backup* in the Vocabulary panel to move it between phone and computer.
 
 Works offline after the first visit, and can be added to the phone home screen ("Add to Home Screen").

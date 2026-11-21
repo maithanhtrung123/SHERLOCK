@@ -579,6 +579,281 @@
     if (m && +m[1] !== cur) renderSection(+m[1]);
   });
 
+  // ---------- read aloud (each character gets a voice) ----------
+  const synth = window.speechSynthesis;
+  const tts = { on: false, paused: false, s: -1, pi: 0, ci: 0, chunks: [], gen: 0, recent: [] };
+  db.settings.voices = db.settings.voices || {};   // role -> {uri, pitch}
+  db.settings.rate = db.settings.rate || 1;
+  const ROLES = [
+    ["narrator", "Narrator (story text)"],
+    ["holmes", "Sherlock Holmes"],
+    ["watson", "Dr. Watson"],
+    ["woman", "Women"],
+    ["man", "Other men"],
+  ];
+  const SAY = "said|says|cried|asked|remarked|answered|replied|continued|observed|whispered|shouted|exclaimed|murmured|returned|added|went on|interrupted|muttered|repeated|groaned|explained|began|suggested|inquired|enquired|roared|sobbed|gasped|snarled|thundered";
+  const TITLE = "(?:Mr\\.|Mrs\\.|Miss|Dr\\.|Lady|Lord|Sir|Inspector|Colonel|Captain|Major|Professor|Mister|Madame|Count|Baron|Sergeant|Constable)";
+  const NAME = `(?:my (?:friend|companion)|our (?:visitor|client)|the (?:old |young )?(?:man|woman|lady|girl|stranger|inspector|detective)|${TITLE}\\s+[A-Z][\\w'-]+(?:\\s[A-Z][\\w'-]+)?|Sherlock Holmes|[A-Z][\\w'-]+(?:\\s[A-Z][\\w'-]+)?|I|he|she)`;
+  const RE_AFTER = new RegExp(`\\b(?:${SAY})\\s+(${NAME})`);       // said Holmes / said I
+  const RE_BEFORE = new RegExp(`(?:^|[\\s,.;—])(${NAME})\\s+(?:${SAY})\\b`); // Holmes said / I asked
+  const FEMALE = /^(?:Mrs\.|Miss|Lady|Madame)|^(?:she|the (?:old |young )?(?:woman|lady|girl))$/;
+  const NOT_NAMES = /^(?:The|It|This|That|There|Then|But|And|What|When|Well|Yes|No|Oh|Ah|Now|So|Why|How|Here|Very|Good|Come)$/;
+
+  function whoFrom(narr) {
+    const m = narr.match(RE_AFTER) || narr.match(RE_BEFORE);
+    if (!m) return null;
+    let n = m[1].trim();
+    if (NOT_NAMES.test(n)) return null;
+    if (n === "I") return { key: "watson", label: "Watson" };
+    if (/^my (?:friend|companion)$/.test(n)) return { key: "companion" };
+    if (/Holmes$/.test(n) && !/Mycroft/.test(n)) return { key: "holmes", label: "Holmes" };
+    if (/Watson$/.test(n)) return { key: "watson", label: "Watson" };
+    if (n === "he") return { key: "?m", label: "" };
+    if (n === "she") return { key: "?f", label: "", female: true };
+    const female = FEMALE.test(n);
+    const label = n.replace(/^(?:the|our|my)\s+/, "");
+    return { key: "x:" + label.replace(TITLE_RE, "").trim().toLowerCase(), label: label.charAt(0).toUpperCase() + label.slice(1), female };
+  }
+  const TITLE_RE = new RegExp("^" + TITLE + "\\s+");
+
+  // split [a,b) of text into sentence-sized chunks (short enough for every browser)
+  function chunkRanges(text, a, b) {
+    const out = [];
+    let s = a;
+    for (let i = a; i < b; i++) {
+      const c = text[i];
+      let cut = -1;
+      if (/[.!?]/.test(c)) {
+        let j = i + 1;
+        while (j < b && /["”’')\]]/.test(text[j])) j++;
+        if ((j >= b || /\s/.test(text[j])) && !(c === "." && ABBR.test(text.slice(Math.max(0, i - 8), i + 1)))) cut = j;
+      } else if (c === "\n") cut = i + 1;
+      else if (i - s > 220 && /[,;:—]/.test(c)) cut = i + 1;
+      if (cut > s) { out.push([s, cut]); s = cut; i = cut - 1; }
+    }
+    if (s < b) out.push([s, b]);
+    return out.filter(([x, y]) => /[\w]/.test(text.slice(x, y)));
+  }
+
+  // An unnamed "he" talking with Watson is usually Holmes, if Holmes was mentioned just before.
+  function holmesNearby(p) {
+    let q = p.previousElementSibling;
+    for (let k = 0; q && q.matches("p[data-p]") && k < 15; k++, q = q.previousElementSibling) if (/Holmes/.test(q.textContent)) return true;
+    return /Holmes/.test(p.textContent);
+  }
+
+  // Break a paragraph into narration / speech chunks and guess the speaker.
+  function plan(p) {
+    const text = textOf(p);
+    const parts = [];  // {a,b,speech}
+    let i = 0;
+    const re = /“[^”]*(?:”|$)/g;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > i) parts.push({ a: i, b: m.index, speech: false });
+      parts.push({ a: m.index, b: m.index + m[0].length, speech: true });
+      i = m.index + m[0].length;
+      if (!m[0].length) break;
+    }
+    if (i < text.length) parts.push({ a: i, b: text.length, speech: false });
+    const narr = parts.filter((x) => !x.speech).map((x) => text.slice(x.a, x.b)).join(" … ");
+    const hasSpeech = parts.some((x) => x.speech);
+    let who = null;
+    if (hasSpeech) {
+      who = whoFrom(narr);
+      const r = tts.recent;
+      if (who && who.key === "companion") {
+        // "said my companion" is usually Holmes, unless someone else is the one talking with Watson
+        const other = r.slice().reverse().find((x) => x.key !== "watson");
+        who = !other || r.some((x) => x.key === "holmes") ? { key: "holmes", label: "Holmes" } : other;
+      }
+      if (!who || who.key[0] === "?") {
+        // unnamed: in a two-person dialogue the speaker alternates
+        const guess = r.length >= 2 ? r[r.length - 2] : null;
+        if (guess && (!who || !!guess.female === !!who.female)) who = guess;
+        else if (who && !who.female && holmesNearby(p)) who = { key: "holmes", label: "Holmes" };
+        else if (who) who = { key: who.female ? "x:woman" : "x:man", label: "", female: who.female };
+        else who = { key: "x:someone", label: "" };
+      }
+      r.push(who); if (r.length > 4) r.shift();
+    } else if (text.trim()) tts.recent = tts.recent.slice(-2);
+    const chunks = [];
+    parts.forEach((pt) => chunkRanges(text, pt.a, pt.b).forEach(([a, b]) =>
+      chunks.push({ a, b, text: text.slice(a, b).replace(/[“”]/g, "").replace(/\s+/g, " ").trim(), who: pt.speech ? who : null })));
+    return chunks;
+  }
+
+  // ----- voices -----
+  let allVoices = [];
+  const NICE = /natural|neural|premium|enhanced|online/i;
+  const FEM_V = /female|zira|samantha|karen|serena|kate|fiona|moira|tessa|victoria|susan|hazel|libby|sonia|jenny|aria|emma|ava|allison|martha|catherine|natasha|clara|michelle|amy|joanna|salli|kimberly|ivy|olivia|maisie|stephanie/i;
+  const MALE_V = /male|daniel|arthur|george|ryan|thomas|oliver|alex|fred|david|mark|guy|christopher|eric|brian|james|william|liam|aaron|rishi|matthew|joey|justin|reed|tom|gordon/i;
+  function loadVoices() {
+    allVoices = synth ? synth.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang)) : [];
+    allVoices.sort((x, y) => (NICE.test(y.name) - NICE.test(x.name)) || (/GB/i.test(y.lang) - /GB/i.test(x.lang)));
+  }
+  const isFem = (v) => FEM_V.test(v.name) && !/\bmale\b/i.test(v.name.replace(/female/i, ""));
+  function defaultVoice(role, n) {
+    const men = allVoices.filter((v) => !isFem(v)), women = allVoices.filter(isFem);
+    const gb = (list) => list.filter((v) => /GB/i.test(v.lang));
+    const pick = (list, k) => list.length ? list[k % list.length] : allVoices[k % Math.max(1, allVoices.length)];
+    if (role === "narrator") return pick(gb(men).length ? gb(men) : men, 0);
+    if (role === "holmes") return pick(gb(men).length > 1 ? gb(men) : men, 1);
+    if (role === "watson") return pick(men, 2);
+    if (role === "woman") return pick(gb(women).length ? gb(women) : women, n || 0);
+    return pick(men, 3 + (n || 0));
+  }
+  const DEF_PITCH = { narrator: 1, holmes: 0.9, watson: 1.05, woman: 1.15, man: 0.85 };
+  function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
+  function voiceFor(who) {
+    let role = "narrator", n = 0;
+    if (who) {
+      if (who.key === "holmes" || who.key === "watson") role = who.key;
+      else { role = who.female ? "woman" : "man"; n = hash(who.key) % 4; }
+    }
+    const conf = db.settings.voices[role] || {};
+    const v = (conf.uri && allVoices.find((x) => x.voiceURI === conf.uri)) || defaultVoice(role, n);
+    let pitch = conf.pitch || DEF_PITCH[role];
+    // other characters share a voice, so vary the pitch to tell them apart
+    if (role === "man" || role === "woman") pitch = Math.max(0.5, Math.min(1.6, pitch + [0, 0.15, -0.12, 0.25][n]));
+    return { v, pitch };
+  }
+
+  // ----- playback -----
+  const hl = window.CSS && CSS.highlights && window.Highlight ? new Highlight() : null;
+  if (hl) CSS.highlights.set("tts", hl);
+  function paraEls() { return $("page").querySelectorAll("p[data-p]"); }
+  function showChunk(p, ch) {
+    document.querySelectorAll("p.reading").forEach((x) => x !== p && x.classList.remove("reading"));
+    p.classList.add("reading");
+    if (hl) {
+      hl.clear();
+      const a = posAt(p, ch.a), b = posAt(p, ch.b);
+      if (a && b) { const r = new Range(); r.setStart(a[0], a[1]); r.setEnd(b[0], b[1]); hl.add(r); }
+    }
+    const rc = p.getBoundingClientRect();
+    if (rc.top < topOffset() + 10 || rc.top > window.innerHeight * 0.6) {
+      window.scrollTo({ top: rc.top + window.scrollY - topOffset() - 60, behavior: "smooth" });
+    }
+    $("plWho").textContent = ch.who ? (ch.who.label || (ch.who.female ? "A woman" : "Someone")) : "Narrator";
+    $("plWho").className = "who " + (ch.who ? (ch.who.key === "holmes" || ch.who.key === "watson" ? ch.who.key : "other") : "narr");
+  }
+  function clearShow() { if (hl) hl.clear(); document.querySelectorAll("p.reading").forEach((x) => x.classList.remove("reading")); }
+
+  function speakNext() {
+    if (!tts.on || tts.paused) return;
+    if (cur !== tts.s) { stopReading(); return; }   // reader moved to another chapter
+    const ps = paraEls();
+    while (true) {
+      if (tts.pi >= ps.length) {
+        if (tts.s >= book.sections.length - 1) { stopReading(); return; }
+        tts.s++; tts.pi = 0; tts.ci = 0; tts.chunks = null; tts.recent = [];
+        renderSection(tts.s); toast("Next: " + book.sections[tts.s].title);
+        return setTimeout(speakNext, 600);
+      }
+      if (!tts.chunks) { tts.chunks = plan(ps[tts.pi]); tts.ci = 0; }
+      if (tts.ci < tts.chunks.length) break;
+      tts.pi++; tts.chunks = null;
+    }
+    const p = ps[tts.pi], ch = tts.chunks[tts.ci];
+    showChunk(p, ch);
+    db.last = { s: tts.s, p: +p.dataset.p }; save();
+    const { v, pitch } = voiceFor(ch.who);
+    const u = new SpeechSynthesisUtterance(ch.text);
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "en-GB";
+    u.pitch = pitch; u.rate = db.settings.rate;
+    const g = ++tts.gen;
+    u.onend = () => { if (g !== tts.gen) return; tts.ci++; speakNext(); };
+    u.onerror = (e) => { if (g !== tts.gen) return; if (e.error === "interrupted" || e.error === "canceled") return; tts.ci++; setTimeout(speakNext, 50); };
+    synth.speak(u);
+  }
+  function startReading(fromP) {
+    if (!synth) { toast("Sorry, this browser cannot read aloud."); return; }
+    loadVoices();
+    const ps = Array.from(paraEls());
+    const p = fromP || visiblePara();
+    tts.s = cur; tts.pi = Math.max(0, ps.indexOf(p)); tts.chunks = null; tts.recent = [];
+    tts.on = true; tts.paused = false; tts.gen++;
+    synth.cancel();
+    $("player").hidden = false; document.body.classList.add("playing");
+    updatePlayBtn();
+    speakNext();
+  }
+  function stopReading() {
+    tts.on = false; tts.paused = false; tts.gen++;
+    if (synth) synth.cancel();
+    clearShow(); $("player").hidden = true; document.body.classList.remove("playing");
+  }
+  function togglePause() {
+    if (!tts.on) return startReading();
+    tts.paused = !tts.paused; tts.gen++;
+    synth.cancel();             // cancel + replay the sentence is more reliable than pause() on phones
+    if (!tts.paused) speakNext();
+    updatePlayBtn();
+  }
+  function skip(d) {
+    if (!tts.on) return;
+    tts.gen++; synth.cancel();
+    const ps = paraEls();
+    if (d < 0 && tts.ci > 0) tts.ci = 0;
+    else { tts.pi = Math.max(0, Math.min(ps.length, tts.pi + d)); tts.chunks = null; }
+    if (tts.chunks) { /* restart current paragraph */ }
+    tts.paused = false; updatePlayBtn(); speakNext();
+  }
+  function updatePlayBtn() { $("plPlay").textContent = tts.paused ? "▶" : "❚❚"; $("plPlay").title = tts.paused ? "Play" : "Pause"; }
+
+  // ----- voices dialog -----
+  function buildVoicesDlg() {
+    loadVoices();
+    const rows = ROLES.map(([role, label]) => {
+      const conf = db.settings.voices[role] || {};
+      const dv = defaultVoice(role, 0);
+      const sel = conf.uri || (dv && dv.voiceURI) || "";
+      const opts = allVoices.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === sel ? " selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join("");
+      const pitch = conf.pitch || DEF_PITCH[role];
+      const popts = [[0.75, "Deep"], [0.85, "Low"], [0.9, "Slightly low"], [1, "Normal"], [1.05, "Slightly high"], [1.15, "High"], [1.3, "Very high"]]
+        .map(([x, l]) => `<option value="${x}"${Math.abs(x - pitch) < 0.03 ? " selected" : ""}>${l}</option>`).join("");
+      return `<div class="vrow" data-role="${role}"><div class="vl">${label}</div><select data-k="uri">${opts}</select><select data-k="pitch">${popts}</select><button type="button" class="btn small" data-test>▶ Test</button></div>`;
+    }).join("");
+    $("vRows").innerHTML = allVoices.length ? rows : `<p class="hint">No English voices found on this device. On iPhone/Mac: Settings → Accessibility → Spoken Content → Voices. On Windows: Settings → Time &amp; language → Speech.</p>`;
+  }
+  const SAMPLE = { narrator: "It was a cold morning in early spring.", holmes: "You have been in Afghanistan, I perceive.", watson: "How on earth did you know that?", woman: "I have come to you, Mr. Holmes, because I am in trouble.", man: "I am Inspector Lestrade of Scotland Yard." };
+  $("vRows").addEventListener("change", (e) => {
+    const row = e.target.closest(".vrow"); if (!row) return;
+    const role = row.dataset.role, conf = db.settings.voices[role] = db.settings.voices[role] || {};
+    conf[e.target.dataset.k] = e.target.dataset.k === "pitch" ? +e.target.value : e.target.value;
+    save();
+  });
+  $("vRows").addEventListener("click", (e) => {
+    if (!e.target.matches("[data-test]")) return;
+    const role = e.target.closest(".vrow").dataset.role;
+    const who = role === "narrator" ? null : role === "woman" ? { key: "x:test", female: true } : role === "man" ? { key: "x:test" } : { key: role };
+    const { v, pitch } = voiceFor(who);
+    const conf = db.settings.voices[role] || {};
+    const u = new SpeechSynthesisUtterance(SAMPLE[role]);
+    if (v) u.voice = v; u.pitch = conf.pitch || pitch; u.rate = db.settings.rate;
+    tts.gen++; synth.cancel(); synth.speak(u);
+    if (tts.on) { tts.paused = true; updatePlayBtn(); }
+  });
+  $("vReset").onclick = () => { db.settings.voices = {}; save(); buildVoicesDlg(); };
+
+  if (synth) {
+    loadVoices();
+    if ("onvoiceschanged" in synth) synth.addEventListener("voiceschanged", loadVoices);
+    $("btnListen").onclick = () => (tts.on ? stopReading() : startReading());
+    $("fRead").onclick = () => { const p = pending && pending.p; hideFloat(); window.getSelection().removeAllRanges(); startReading(p); };
+    $("plPlay").onclick = togglePause;
+    $("plStop").onclick = stopReading;
+    $("plPrev").onclick = () => skip(-1);
+    $("plNext").onclick = () => skip(1);
+    $("plRate").value = String(db.settings.rate);
+    $("plRate").onchange = () => { db.settings.rate = +$("plRate").value; save(); if (tts.on && !tts.paused) { tts.gen++; synth.cancel(); speakNext(); } };
+    $("plVoices").onclick = () => { buildVoicesDlg(); $("dlgVoices").showModal ? $("dlgVoices").showModal() : $("dlgVoices").setAttribute("open", ""); };
+    window.addEventListener("pagehide", () => synth.cancel());
+  } else {
+    $("btnListen").hidden = true; $("fRead").hidden = true;
+  }
+
   // ---------- start ----------
   applySettings();
   updateCount();
