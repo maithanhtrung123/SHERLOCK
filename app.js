@@ -351,7 +351,8 @@
   function hideFloat() { fl.hidden = true; pending = null; document.querySelectorAll("p.sel").forEach((x) => x.classList.remove("sel")); }
   function hideFloatIfTap() { if (pending && !pending.word) hideFloat(); }
   function showFloat(rect, withSave) {
-    $("fSave").hidden = !withSave; $("fAsk").hidden = !withSave; $("fTrans").hidden = !withSave;
+    $("fSave").hidden = !withSave; $("fAsk").hidden = !withSave;
+    $("fTrans").hidden = false; $("fTrans").textContent = withSave ? "🌐 Translate" : "🌐 Translate paragraph";
     fl.hidden = false;
     const w = fl.offsetWidth, h = fl.offsetHeight;
     let x = rect.left + rect.width / 2 - w / 2 + window.scrollX;
@@ -425,8 +426,9 @@
     const text = textOf(p);
     return { word, start, sentence: sentenceAround(text, start, end), paragraph: text.replace(/\s+/g, " ").trim(), s: cur, p: +p.dataset.p, path: pathText(book.sections[cur]) };
   }
-  const markIn = (sentence, word) => esc(sentence).replace(esc(word), `<mark>${esc(word)}</mark>`);
+  const markIn = (sentence, word) => word === sentence ? esc(sentence) : esc(sentence).replace(esc(word), `<mark>${esc(word)}</mark>`);
   $("fTrans").onclick = async () => {
+    if (pending && !pending.word) { const p = pending.p; hideFloat(); translatePara(p); return; }
     if (!pending || !pending.word) return;
     const me = selContext();
     hideFloat(); window.getSelection().removeAllRanges();
@@ -434,6 +436,7 @@
   };
   async function lookupTr(me) {
     tr = me;
+    $("trSave").hidden = false;
     $("trQuote").innerHTML = markIn(me.sentence, me.word) + `<cite>${esc(me.path)}</cite>`;
     $("trBody").innerHTML = `<p class="hint">${aiReady() ? "✨ AI is reading the sentence…" : "Looking it up…"}</p>`;
     if (!$("dlgTr").open) $("dlgTr").showModal();
@@ -456,6 +459,39 @@ Reply with JSON only: {"translation": "${langName()} translation of the selected
     if (tr !== me) return;   // another lookup started
     me.info = info;
     renderTr();
+  }
+  // whole paragraph: simple-English version + translation (AI), or machine translation
+  async function translatePara(p) {
+    const text = textOf(p).replace(/\s+/g, " ").trim();
+    const me = tr = { para: true, word: text, sentence: text, paragraph: text, s: cur, p: +p.dataset.p, path: pathText(book.sections[cur]) };
+    $("trQuote").innerHTML = esc(text) + `<cite>${esc(me.path)}</cite>`;
+    $("trBody").innerHTML = `<p class="hint">${aiReady() ? "✨ AI is reading the paragraph…" : "Translating…"}</p>`;
+    $("trSave").hidden = true;
+    if (!$("dlgTr").open) $("dlgTr").showModal();
+    let h = "";
+    if (aiReady()) {
+      try {
+        const r = await askAI(`You help an English learner whose first language is ${langName()}. They are reading Sherlock Holmes (Victorian English).
+Paragraph: "${text}"
+Reply with JSON only: {"simple": "the paragraph retold in simple modern English, same meaning, short sentences", "translation": "natural ${langName()} translation of the whole paragraph", "words": [{"word": "a difficult or old-fashioned word/phrase from the paragraph", "meaning": "simple English meaning here"}] (max 6)}`, true);
+        h += `<div class="tr-sec"><b>In simple English</b><p>${esc(r.simple || "")}</p></div>`;
+        if (r.translation) h += `<div class="tr-sec tr-sent"><b>🇻🇳 ${esc(langName())}</b><p>${esc(r.translation)}</p></div>`;
+        if (r.words && r.words.length) h += `<div class="tr-sec"><b>Difficult words</b><ul class="tr-words">${r.words.map((w) => `<li><b>${esc(w.word)}</b> – ${esc(w.meaning)}</li>`).join("")}</ul></div>`;
+      } catch (e) { h = `<p class="hint">AI helper: ${esc(e.message)} – using machine translation.</p>`; }
+    }
+    if (!h || h.startsWith("<p class=\"hint\">")) {
+      // MyMemory takes ~500 characters per request: translate sentence by sentence in chunks
+      const parts = [], sents = text.match(/[^.!?]+[.!?]+["”’)]*\s*|[^.!?]+$/g) || [text];
+      let cur2 = "";
+      sents.forEach((x) => { if ((cur2 + x).length > 450 && cur2) { parts.push(cur2); cur2 = ""; } cur2 += x; });
+      if (cur2) parts.push(cur2);
+      const out = await Promise.all(parts.map((x) => translate(x.trim())));
+      const vi = out.join(" ").trim();
+      h += vi ? `<div class="tr-sec tr-sent"><b>🇻🇳 ${esc(langName())}</b> <span class="tag">machine translation</span><p>${esc(vi)}</p></div>` : `<p class="hint">Could not translate (no internet?).</p>`;
+      if (!aiReady()) h += `<p class="hint"><button class="link" data-ai-setup>✨ Set up AI helper</button> for a simple-English version and the difficult words explained.</p>`;
+    }
+    if (tr !== me) return;
+    $("trBody").innerHTML = h;
   }
   function renderTr() {
     const i = tr.info; let h = "";
@@ -496,7 +532,8 @@ Reply with JSON only: {"translation": "${langName()} translation of the selected
   function openAsk(c) {
     ask = Object.assign({}, c, { msgs: [] });
     const word = ask.word;
-    $("askQuote").innerHTML = esc(ask.sentence).replace(esc(word), `<mark>${esc(word)}</mark>`) + `<cite>${esc(ask.path)}</cite>`;
+    $("askQuote").innerHTML = markIn(ask.sentence, word) + `<cite>${esc(ask.path)}</cite>`;
+    $("askSaveWord").hidden = !!ask.para;
     $("askLog").innerHTML = aiReady() ? "" : `<p class="hint">To ask questions, add your AI key first (DeepSeek, Gemini, Claude or OpenAI). <button class="link" data-ai-setup>✨ Set up AI helper</button></p>`;
     $("askInput").value = "";
     $("askQuick").hidden = false;
@@ -1804,7 +1841,8 @@ ${showVi() ? `- a ${langName()} note in one line
     $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; $("aiTest").textContent = "";
     const d = $("dlgAI"); if (d.showModal) d.showModal(); else d.setAttribute("open", "");
   }
-  $("dlgAI").addEventListener("close", () => { if ($("dlgTr").open && tr && tr.info && aiReady() && tr.info.meaningSrc !== "ai") lookupTr(tr);
+  $("dlgAI").addEventListener("close", () => { if ($("dlgTr").open && tr && tr.para && aiReady()) translatePara($("page").querySelector(`p[data-p="${tr.p}"]`));
+    else if ($("dlgTr").open && tr && tr.info && aiReady() && tr.info.meaningSrc !== "ai") lookupTr(tr);
     else if ($("dlgAsk").open && aiReady() && !ask.msgs.length) { $("askLog").innerHTML = ""; $("askInput").focus(); } });
   $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && rv.queue[rv.i].kind === "learn") showCard(); });
   $("aiProvider").onchange = () => { $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; };
