@@ -412,6 +412,7 @@
     });
     save(); draft = null;
     updateCount(); markVocab(); updateStatus();
+    enrich(db.vocab[0]);   // fetch the meaning in the background
     toast(`Saved “${word}” to your vocabulary`);
   });
   $("formSave").addEventListener("submit", (e) => {
@@ -587,6 +588,7 @@
 
   $("btnExportAll").onclick = () => {
     const out = Object.assign({ app: "Sherlock Reader", kind: "learning-progress", version: 1, exportedAt: new Date().toISOString() }, db);
+    out.settings = Object.assign({}, db.settings, { ai: undefined });   // your AI key stays on this device
     download(`sherlock-learning-${stamp()}.json`, JSON.stringify(out, null, 1), "application/json");
     toast("Saved – keep this file to continue later or on another device");
   };
@@ -615,6 +617,8 @@
       const mine = byId.get(v.id);
       if (!mine) { db.vocab.push(v); added++; return; }
       if (!mine.note && v.note) mine.note = v.note;
+      ["meaning", "vi", "pos", "example", "tip", "defs", "ipa", "meaningSrc"].forEach((k) => { if (!mine[k] && v[k]) mine[k] = v[k]; });
+      if (v.learned) mine.learned = true;
       const a = mine.srs, b = v.srs;          // keep the review schedule that is further along
       if (b && (!a || (b.reps + b.lapses) > (a.reps + a.lapses) || ((b.reps + b.lapses) === (a.reps + a.lapses) && b.due > a.due))) mine.srs = b;
       if (v.exported) mine.exported = true;
@@ -1169,133 +1173,355 @@
   loadAudioMap();
   if (!synth && !("Audio" in window)) { $("btnListen").hidden = true; $("fRead").hidden = true; }
 
-  // ---------- daily review (spaced repetition, like Anki) ----------
+  // ---------- learn first, then review with quizzes (spaced repetition) ----------
   const DAY = 86400000;
   db.reviewLog = db.reviewLog || {};          // "YYYY-MM-DD" -> cards reviewed that day
   if (db.settings.autoReview === undefined) db.settings.autoReview = true;
-  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  db.settings.ai = db.settings.ai || { provider: "deepseek", key: "", model: "" };
+  const dkey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = () => dkey(new Date());
   const srsOf = (v) => (v.srs = v.srs || { due: 0, ivl: 0, ease: 2.5, reps: 0, lapses: 0 });
-  const dueList = () => db.vocab.filter((v) => srsOf(v).due <= Date.now()).sort((a, b) => a.srs.due - b.srs.due);
+  // words saved before "learn first" existed and already reviewed count as learned
+  db.vocab.forEach((v) => { if (v.learned === undefined && v.srs && v.srs.reps > 0) v.learned = true; });
+  const toLearn = () => db.vocab.filter((v) => !v.learned).sort((a, b) => a.at - b.at);
+  const dueList = () => db.vocab.filter((v) => v.learned && srsOf(v).due <= Date.now()).sort((a, b) => a.srs.due - b.srs.due);
+  function nextMorning() { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(5, 0, 0, 0); return d.getTime(); }
   function streak() {
     let n = 0;
-    const d = new Date();
-    if (!db.reviewLog[today()] && !(db.readLog || {})[today()]) d.setDate(d.getDate() - 1);   // today not done yet: count up to yesterday
-    for (;;) {
-      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (!db.reviewLog[k] && !(db.readLog || {})[k]) return n;
-      n++; d.setDate(d.getDate() - 1);
-    }
+    const d = new Date(), on = (k) => db.reviewLog[k] || (db.readLog || {})[k];
+    if (!on(today())) d.setDate(d.getDate() - 1);   // today not done yet: count up to yesterday
+    while (on(dkey(d))) { n++; d.setDate(d.getDate() - 1); }
+    return n;
   }
-  // next interval (days) for each answer; 0 = again in 10 minutes
-  function nextIvl(s, grade) {
-    if (grade === 0) return 0;
-    if (grade === 1) return Math.max(1, Math.round(s.ivl * 1.2));
-    if (grade === 2) return s.reps === 0 ? 1 : s.reps === 1 ? 3 : Math.max(s.ivl + 1, Math.round(s.ivl * s.ease));
-    return s.reps === 0 ? 4 : Math.max(s.ivl + 2, Math.round(s.ivl * s.ease * 1.3));
+  function nextIvl(s, ok) {
+    if (!ok) return 0;
+    return s.reps === 0 ? 1 : s.reps === 1 ? 3 : Math.max(s.ivl + 1, Math.round(s.ivl * s.ease));
   }
-  const ivlText = (d) => d === 0 ? "10 min" : d < 30 ? d + (d === 1 ? " day" : " days") : d < 365 ? Math.round(d / 30) + " mo" : (d / 365).toFixed(1) + " yr";
-  function grade(v, g) {
-    const s = srsOf(v), ivl = nextIvl(s, g);
-    if (g === 0) { s.lapses++; s.reps = 0; s.ease = Math.max(1.3, s.ease - 0.2); s.due = Date.now() + 10 * 60000; }
-    else {
-      s.reps++; s.ivl = ivl; s.due = Date.now() + ivl * DAY - 3600000;   // an hour early so it shows the same time of day
-      if (g === 1) s.ease = Math.max(1.3, s.ease - 0.15);
-      if (g === 3) s.ease += 0.15;
-    }
+  const ivlText = (d) => d === 0 ? "again soon" : d === 1 ? "tomorrow" : d < 30 ? `in ${d} days` : d < 365 ? `in ${Math.round(d / 30)} months` : `in ${(d / 365).toFixed(1)} years`;
+  function grade(v, ok) {
+    const s = srsOf(v);
+    if (!ok) { s.lapses++; s.reps = 0; s.ivl = 0; s.ease = Math.max(1.3, s.ease - 0.2); s.due = Date.now() + 10 * 60000; }
+    else { s.ivl = nextIvl(s, true); s.reps++; s.due = Date.now() + s.ivl * DAY - 3600000; }
     db.reviewLog[today()] = (db.reviewLog[today()] || 0) + 1;
     save();
   }
 
-  const rv = { queue: [], i: 0, done: 0, shown: false };
-  function cloze(sentence, word) {
-    const i = sentence.toLowerCase().indexOf(word.toLowerCase());
-    if (i < 0) return esc(sentence);
-    const blank = word.replace(/\S/g, "_").replace(/_+/g, (m) => m.length > 3 ? "_".repeat(Math.min(m.length, 10)) : "___");
-    return esc(sentence.slice(0, i)) + `<span class="blank">${blank}</span>` + esc(sentence.slice(i + word.length));
+  // ----- meanings: free dictionary + translation, or your AI -----
+  const LANGS = { vietnamese: "vi", "tiếng việt": "vi", chinese: "zh", japanese: "ja", korean: "ko", thai: "th", spanish: "es", french: "fr", indonesian: "id" };
+  async function getJSON(url, opts) {
+    const r = await fetch(url, opts);
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = await r.json(); msg += " " + ((j.error && (j.error.message || j.error)) || j.message || ""); } catch (e) {}
+      if (r.status === 401 || r.status === 403) msg += " (the key looks wrong)";
+      if (r.status === 402) msg += " (no balance left on this account)";
+      throw new Error(msg.trim());
+    }
+    return r.json();
+  }
+  async function dictLookup(word) {
+    const w = word.toLowerCase().replace(/[^a-z'\- ]/g, "").trim();
+    const tries = [w];
+    if (/(ies)$/.test(w)) tries.push(w.replace(/ies$/, "y"));
+    if (/(es|s)$/.test(w)) tries.push(w.replace(/es$/, ""), w.replace(/s$/, ""));
+    if (/ed$/.test(w)) tries.push(w.replace(/d$/, ""), w.replace(/ed$/, ""));
+    if (/ing$/.test(w)) tries.push(w.replace(/ing$/, ""), w.replace(/ing$/, "e"));
+    for (const t of tries) {
+      try {
+        const j = await getJSON("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(t));
+        const defs = [];
+        j.forEach((e) => e.meanings.forEach((m) => m.definitions.forEach((d) => defs.push({ pos: m.partOfSpeech, def: d.definition, ex: d.example }))));
+        if (defs.length) return { ipa: j[0].phonetic || "", defs: defs.slice(0, 6) };
+      } catch (e) { /* try next form */ }
+    }
+    return null;
+  }
+  async function translate(text) {
+    const code = LANGS[(db.settings.lang || "").toLowerCase()];
+    if (!code) return "";
+    try {
+      const j = await getJSON(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${code}`);
+      return (j.responseData && j.responseData.translatedText) || "";
+    } catch (e) { return ""; }
+  }
+  const aiReady = () => !!(db.settings.ai && db.settings.ai.key);
+  const AI_DEFAULT_MODEL = { deepseek: "deepseek-chat", gemini: "gemini-2.5-flash", claude: "claude-opus-5-5", openai: "gpt-4o-mini" };
+  async function askAI(prompt, json) {
+    const { provider, key } = db.settings.ai, model = db.settings.ai.model || AI_DEFAULT_MODEL[provider];
+    let text = "";
+    if (provider === "gemini") {
+      const j = await getJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: json ? { responseMimeType: "application/json" } : {} }),
+      });
+      text = (((j.candidates || [])[0] || {}).content || { parts: [] }).parts.map((p) => p.text || "").join("");
+    } else if (provider === "claude") {
+      const j = await getJSON("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model, max_tokens: 2000, output_config: { effort: "low" }, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (j.stop_reason === "refusal") throw new Error("The AI declined this request");
+      text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+    } else {
+      // DeepSeek and OpenAI use the same request format
+      const url = provider === "deepseek" ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions";
+      const j = await getJSON(url, {
+        method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], ...(json ? { response_format: { type: "json_object" } } : {}) }),
+      });
+      text = ((j.choices || [])[0] || { message: {} }).message.content || "";
+    }
+    if (!json) return text.trim();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("Unexpected AI answer");
+    return JSON.parse(m[0]);
+  }
+  const langName = () => db.settings.lang || "Vietnamese";
+  async function aiMeaning(v) {
+    return askAI(`You help an English learner whose first language is ${langName()}. They are reading Sherlock Holmes (Victorian English).
+Word or phrase: "${v.word}"
+Sentence: "${v.sentence}"
+Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple English, max 15 words", "pos": "part of speech", "translation": "${langName()} translation of the word as used here", "example": "one short modern example sentence using it", "tip": "one short tip, e.g. whether it is old-fashioned, in ${langName()}"}`, true);
+  }
+  // Fill in a meaning automatically (AI if set up, otherwise free dictionary + translation).
+  async function enrich(v, force) {
+    if (v._busy || (!force && v.meaning && v.vi)) return;
+    v._busy = true;
+    try {
+      if (aiReady() && (force || !v.meaning)) {
+        try {
+          const r = await aiMeaning(v);
+          v.meaning = r.meaning || v.meaning; v.pos = r.pos || v.pos; v.vi = r.translation || v.vi;
+          v.example = r.example || v.example; v.tip = r.tip || ""; v.meaningSrc = "ai";
+        } catch (e) { toast("AI helper: " + e.message); }
+      }
+      if (!v.defs && !v.meaning) {
+        const d = await dictLookup(v.word);
+        if (d) { v.defs = d.defs; v.ipa = d.ipa; }
+      }
+      if (!v.vi) v.vi = await translate(v.word);
+      save();
+    } finally { delete v._busy; }
+  }
+
+  // ----- the learn/review window -----
+  const rv = { mode: "learn", queue: [], i: 0, done: 0, answered: false };
+  const DISTRACT_DEFS = ["a large building where horses are kept", "to speak very quietly", "extremely happy and excited", "a small boat used on rivers",
+    "feeling sleepy and tired", "a person who sells fish", "to move away quickly in fear", "very old and broken", "a type of warm winter coat",
+    "to agree with someone politely", "a bright light in the sky", "a long journey by sea", "to borrow money from a bank", "slightly wet and cold",
+    "a meal eaten late at night", "to laugh in a quiet way", "a tall wooden fence", "full of noise and people", "to forget something important", "a sudden loud sound"];
+  const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const meaningOf = (v) => v.meaning || v.note || "";
+  function bookWords(n, len, avoid) {
+    const out = new Set(), secs = book.sections;
+    for (let tries = 0; out.size < n && tries < 400; tries++) {
+      const s = secs[Math.floor(Math.random() * secs.length)], p = s.paras[Math.floor(Math.random() * s.paras.length)];
+      const ws = p[1].replace(/<[^>]+>/g, " ").match(/[a-z]{4,}/g) || [];
+      const w = ws[Math.floor(Math.random() * ws.length)];
+      if (w && Math.abs(w.length - len) <= 2 && !avoid.has(w)) out.add(w);
+    }
+    return [...out];
+  }
+  function quizType(v) {
+    const s = srsOf(v), has = !!meaningOf(v);
+    const order = has ? ["mc", "fill", "type"] : ["fill"];
+    return order[(s.reps + s.lapses) % order.length];
+  }
+  function startSession() {
+    const learn = toLearn(), due = dueList();
+    rv.queue = [...learn.map((v) => ({ v, kind: "learn" })), ...shuffle(due.slice(0, 30)).map((v) => ({ v, kind: quizType(v) }))];
+    rv.i = 0; rv.done = 0;
+    learn.forEach((v) => enrich(v).then(() => { const c = rv.queue[rv.i]; if (c && c.v === v && c.kind === "learn") showCard(); }));
   }
   function openReview() {
-    rv.queue = dueList().slice(0, 30); rv.i = 0; rv.done = 0;
+    startSession();
     const dlg = $("dlgReview");
     if (!dlg.open) { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", ""); }
     showCard();
   }
   function header() {
-    const s = streak();
-    $("rvHead").innerHTML = `<span>🔥 ${s} ${s === 1 ? "day" : "days"}</span><span>${rv.done} done · ${Math.max(0, rv.queue.length - rv.i)} left</span>`;
+    const s = streak(), left = rv.queue.slice(rv.i), nl = left.filter((c) => c.kind === "learn").length;
+    $("rvHead").innerHTML = `<span>🔥 ${s} ${s === 1 ? "day" : "days"}</span><span>${nl ? `📖 ${nl} to learn · ` : ""}🧠 ${left.length - nl} to review</span>`;
+  }
+  const say = (t) => `<button class="btn small say" data-say="${esc(t)}" title="Listen">🔊</button>`;
+  function meaningBlock(v) {
+    let h = "";
+    if (v.meaning) h += `<div class="rv-mean"><b>Meaning:</b> ${esc(v.meaning)}${v.meaningSrc === "ai" ? ' <span class="tag">AI</span>' : ""}</div>`;
+    else if (v.defs && v.defs.length) {
+      h += `<div class="rv-mean"><b>Which meaning fits the sentence?</b> <span class="hint">Tap one</span>` +
+        v.defs.map((d, i) => `<button class="def" data-def="${i}"><i>${esc(d.pos)}</i> ${esc(d.def)}</button>`).join("") + `</div>`;
+    } else if (v._busy) h += `<div class="rv-mean hint">Looking up the meaning…</div>`;
+    if (v.vi) h += `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>`;
+    if (v.example) h += `<div class="rv-ex">e.g. <i>${esc(v.example)}</i></div>`;
+    if (v.tip) h += `<div class="rv-ex">💡 ${esc(v.tip)}</div>`;
+    h += `<label class="rv-note">My note / meaning in my words<input data-rv-note value="${esc(v.note || "")}" placeholder="Optional"></label>`;
+    return h;
   }
   function showCard() {
     header();
-    const v = rv.queue[rv.i];
-    const body = $("rvBody");
-    if (!v) {
-      const total = db.vocab.length, next = db.vocab.map((x) => srsOf(x).due).filter((d) => d > Date.now()).sort((a, b) => a - b)[0];
-      body.innerHTML = total
-        ? `<div class="rv-done"><div class="big">🎉</div><p><b>All done for now!</b></p><p class="hint">${rv.done ? `You reviewed ${rv.done} ${rv.done === 1 ? "word" : "words"}. ` : ""}${next ? "Next review: " + new Date(next).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}</p></div>`
-        : `<div class="rv-done"><p><b>No words yet.</b></p><p class="hint">Save words while reading (select a word → ＋ Save word). They will come back here to review.</p></div>`;
-      $("rvActions").innerHTML = `<button class="btn primary" data-close-review>Back to reading</button>`;
+    const c = rv.queue[rv.i], body = $("rvBody");
+    rv.answered = false;
+    if (!c) {
+      const next = db.vocab.filter((x) => x.learned).map((x) => srsOf(x).due).filter((d) => d > Date.now()).sort((a, b) => a - b)[0];
+      body.innerHTML = db.vocab.length
+        ? `<div class="rv-done"><div class="big">🎉</div><p><b>All done for now!</b></p><p class="hint">${rv.done ? `You practised ${rv.done} ${rv.done === 1 ? "word" : "words"}. ` : ""}${next ? "Next review: " + new Date(next).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}</p></div>`
+        : `<div class="rv-done"><p><b>No words yet.</b></p><p class="hint">Select a word while reading → ＋ Save word. You will learn it here first, then practise it from the next morning.</p></div>`;
+      $("rvActions").innerHTML = `<button class="btn primary wide" data-close-review>Back to reading</button>`;
       return;
     }
-    const s = srsOf(v);
-    body.innerHTML = `<div class="rv-card">
-        <div class="rv-tag">${s.reps === 0 && !s.lapses ? "New word" : "Review"} · ${esc(v.path)}</div>
+    const v = c.v;
+    if (c.kind === "learn") {
+      body.innerHTML = `<div class="rv-card"><div class="rv-tag">📖 New word · ${esc(v.path)}</div>
+        <div class="rv-word">${esc(v.word)} ${say(v.word)} ${v.ipa ? `<span class="ipa">${esc(v.ipa)}</span>` : ""}</div>
+        <blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>
+        ${meaningBlock(v)}
+        <div class="rv-ai">${aiReady() ? `<button class="btn small" data-ai-explain>✨ Ask AI to explain</button>` : `<button class="link" data-ai-setup>✨ Turn on the AI helper for better explanations</button>`}<div class="ai-out" id="aiOut"></div></div></div>`;
+      $("rvActions").innerHTML = `<button class="btn" data-skip>Later</button><button class="btn primary span3" data-learned>✓ I understand</button>`;
+      return;
+    }
+    const m = meaningOf(v);
+    if (c.kind === "mc") {
+      const others = shuffle(db.vocab.filter((x) => x !== v && meaningOf(x) && meaningOf(x) !== m).map(meaningOf));
+      const opts = shuffle([m, ...[...others, ...shuffle(DISTRACT_DEFS.slice())].slice(0, 2)]);
+      c.answer = m;
+      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 What does it mean here?</div>
+        <div class="rv-word">${esc(v.word)} ${say(v.word)}</div>
+        <blockquote>${highlight(v.sentence, v.word)}</blockquote>
+        <div class="opts">${opts.map((o, i) => `<button class="opt" data-opt="${esc(o)}"><b>${"ABC"[i]}</b> ${esc(o)}</button>`).join("")}</div></div>`;
+    } else if (c.kind === "fill") {
+      const lw = v.word.toLowerCase();
+      const others = shuffle(db.vocab.filter((x) => x.word.toLowerCase() !== lw).map((x) => x.word));
+      const avoid = new Set([lw, ...v.sentence.toLowerCase().split(/\W+/)]);
+      const pool = [...others, ...bookWords(4, v.word.length, avoid)].filter((w, i, a) => a.indexOf(w) === i && w.toLowerCase() !== lw);
+      const opts = shuffle([v.word, ...pool.slice(0, 2)]);
+      c.answer = v.word;
+      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 Choose the missing word</div>
         <p class="rv-q">${cloze(v.sentence, v.word)}</p>
-        <div class="rv-ans" hidden>
-          <div class="rv-word">${esc(v.word)} <button class="btn small" data-say-word title="Hear the word">🔊</button></div>
-          <blockquote>${highlight(v.sentence, v.word)} <button class="btn small" data-say-sent title="Hear the sentence">🔊</button></blockquote>
-          <label class="rv-note">Meaning / my note<input data-rv-note value="${esc(v.note || "")}" placeholder="Write the meaning here (e.g. from your AI)"></label>
-        </div>
-      </div>`;
-    $("rvActions").innerHTML = `<button class="btn primary wide" data-show>Show the word</button>`;
+        ${m ? `<p class="hint">Hint: ${esc(m)}</p>` : ""}
+        <div class="opts">${opts.map((o, i) => `<button class="opt" data-opt="${esc(o)}"><b>${"ABC"[i]}</b> ${esc(o)}</button>`).join("")}</div></div>`;
+    } else {
+      c.answer = v.word;
+      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 Type the word</div>
+        <div class="rv-mean big">${esc(m)}</div>${v.vi ? `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>` : ""}
+        <p class="hint">Starts with “${esc(v.word.charAt(0))}” · ${v.word.length} letters</p>
+        <form id="typeForm" class="typeform"><input id="typeIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type the word…"><button class="btn primary">Check</button></form>
+        <div id="typeRes"></div></div>`;
+      setTimeout(() => $("typeIn") && $("typeIn").focus(), 50);
+      $("typeForm").onsubmit = (e) => { e.preventDefault(); answer($("typeIn").value); };
+    }
+    $("rvActions").innerHTML = "";
   }
-  function showAnswer() {
-    const v = rv.queue[rv.i]; if (!v) return;
-    $("rvBody").querySelector(".rv-ans").hidden = false;
-    $("rvBody").querySelector(".rv-q").hidden = true;
+  function cloze(sentence, word) {
+    const i = sentence.toLowerCase().indexOf(word.toLowerCase());
+    if (i < 0) return esc(sentence) + ` <span class="blank">______</span>`;
+    return esc(sentence.slice(0, i)) + `<span class="blank">______</span>` + esc(sentence.slice(i + word.length));
+  }
+  const norm = (s) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z' -]/g, "").replace(/\s+/g, " ").trim();
+  function answer(given) {
+    const c = rv.queue[rv.i]; if (!c || rv.answered) return;
+    rv.answered = true;
+    const v = c.v, ok = norm(given) === norm(c.answer);
+    $("rvBody").querySelectorAll(".opt").forEach((b) => {
+      b.disabled = true;
+      if (b.dataset.opt === c.answer) b.classList.add("right");
+      else if (b.dataset.opt === given) b.classList.add("wrong");
+    });
+    if ($("typeIn")) $("typeIn").disabled = true;
+    grade(v, ok); rv.done++;
+    if (!ok) rv.queue.push({ v, kind: "fill" });   // practise again in this session, the easy way
     const s = srsOf(v);
-    const b = (g, label, vi, cls) => `<button class="btn grade ${cls}" data-grade="${g}"><b>${label}</b><small>${vi} · ${ivlText(nextIvl(s, g))}</small></button>`;
-    $("rvActions").innerHTML = b(0, "Again", "Quên", "g0") + b(1, "Hard", "Khó", "g1") + b(2, "Good", "Nhớ", "g2") + b(3, "Easy", "Dễ", "g3");
+    const fb = document.createElement("div");
+    fb.className = "fb " + (ok ? "ok" : "no");
+    fb.innerHTML = (ok ? `✅ Correct! You will see it ${ivlText(s.ivl)}.` : `❌ Not quite. The answer is <b>${esc(v.word)}</b>${c.kind === "type" && given.trim() ? ` (you wrote “${esc(given)}”)` : ""}.`) +
+      `<blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>` +
+      (meaningOf(v) ? `<div class="rv-mean"><b>Meaning:</b> ${esc(meaningOf(v))}</div>` : "") + (v.vi ? `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>` : "") +
+      (!ok && aiReady() ? `<button class="btn small" data-ai-feedback="${esc(given)}">✨ Ask AI why</button><div class="ai-out" id="aiOut"></div>` : "");
+    $("rvBody").querySelector(".rv-card").appendChild(fb);
+    $("rvActions").innerHTML = `<button class="btn primary wide" data-next>Next →</button>`;
+    updateReviewBadge();
   }
   function sayText(t) {
     if (!synth) return;
     synth.cancel();
     const u = new SpeechSynthesisUtterance(t);
-    const vv = allVoices.length ? (voiceFor(null).v) : null;
+    loadVoices();
+    const vv = allVoices.length ? voiceFor(null).v : null;
     if (vv) u.voice = vv; u.lang = vv ? vv.lang : "en-GB"; u.rate = Math.min(1, db.settings.rate);
     synth.speak(u);
   }
+  async function aiInto(promise) {
+    const out = $("aiOut"); if (!out) return;
+    out.textContent = "✨ Thinking…";
+    try { const t = await promise; out.innerHTML = esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>"); }
+    catch (e) { out.textContent = "AI helper error: " + e.message + ". Check your key in ✨ AI helper."; }
+  }
   $("dlgReview").addEventListener("click", (e) => {
     const t = e.target.closest("button"); if (!t) return;
-    const v = rv.queue[rv.i];
-    if (t.matches("[data-show]")) showAnswer();
-    else if (t.matches("[data-grade]")) {
-      const g = +t.dataset.grade;
-      grade(v, g); rv.done++;
-      if (g === 0) rv.queue.push(v);      // see it again in this session
-      rv.i++; showCard(); updateReviewBadge();
-    } else if (t.matches("[data-say-word]")) sayText(v.word);
-    else if (t.matches("[data-say-sent]")) sayText(v.sentence);
+    const c = rv.queue[rv.i], v = c && c.v;
+    if (t.dataset.say) sayText(t.dataset.say);
     else if (t.matches("[data-close-review]")) $("dlgReview").close();
+    else if (t.matches("[data-learned]")) {
+      v.learned = true; v.learnedAt = Date.now();
+      Object.assign(srsOf(v), { due: nextMorning(), ivl: 0, reps: 0 });
+      db.reviewLog[today()] = (db.reviewLog[today()] || 0) + 1;
+      save(); rv.done++; rv.i++; showCard(); updateReviewBadge();
+      toast(`“${v.word}” learned – first review tomorrow morning`);
+    } else if (t.matches("[data-skip]")) { rv.i++; showCard(); }
+    else if (t.dataset.def) { const d = v.defs[+t.dataset.def]; v.meaning = d.def; v.pos = d.pos; v.example = v.example || d.ex || ""; v.meaningSrc = "dict"; save(); showCard(); }
+    else if (t.dataset.opt !== undefined) answer(t.dataset.opt);
+    else if (t.matches("[data-next]")) { rv.i++; showCard(); }
+    else if (t.matches("[data-ai-explain]")) {
+      t.disabled = true;
+      enrich(v, true).then(() => showCard());
+      aiInto(askAI(`Explain to an English learner (first language ${langName()}) the word "${v.word}" as used in this sentence from Sherlock Holmes: "${v.sentence}". Give: the meaning here, the whole sentence in simple modern English, and a ${langName()} translation of the sentence. Keep it short.`));
+    } else if (t.dataset.aiFeedback !== undefined) {
+      t.disabled = true;
+      aiInto(askAI(`An English learner (first language ${langName()}) was practising the word "${v.word}" (meaning: ${meaningOf(v) || "see sentence"}). Sentence: "${v.sentence}". They answered "${t.dataset.aiFeedback}". In 3 short sentences, kindly explain the difference and give a memory trick. Write in simple English, then repeat the key point in ${langName()}.`));
+    } else if (t.matches("[data-ai-setup]")) { openAISetup(); }
   });
   $("dlgReview").addEventListener("change", (e) => {
     if (!e.target.matches("[data-rv-note]")) return;
-    const v = rv.queue[rv.i]; if (v) { v.note = e.target.value.trim(); save(); }
+    const c = rv.queue[rv.i]; if (c) { c.v.note = e.target.value.trim(); save(); }
   });
   document.addEventListener("keydown", (e) => {
     if (!$("dlgReview").open || e.target.closest("input")) return;
-    if (e.key === " " || e.key === "Enter") { const s = $("rvActions").querySelector("[data-show]"); if (s) { e.preventDefault(); s.click(); } }
-    if (/^[1-4]$/.test(e.key)) { const g = $("rvActions").querySelector(`[data-grade="${+e.key - 1}"]`); if (g) g.click(); }
+    if (/^[1-3]$/.test(e.key)) { const b = $("rvBody").querySelectorAll(".opt")[+e.key - 1]; if (b && !b.disabled) b.click(); }
+    if (e.key === "Enter") { const n = $("rvActions").querySelector("[data-next],[data-learned]"); if (n) { e.preventDefault(); n.click(); } }
   });
   $("rvAuto").checked = db.settings.autoReview;
   $("rvAuto").onchange = () => { db.settings.autoReview = $("rvAuto").checked; save(); };
   $("btnReview").onclick = () => { closePanels(); openReview(); };
   function updateReviewBadge() {
-    const n = dueList().length;
+    const n = dueList().length + toLearn().length;
     $("reviewCount").textContent = n; $("reviewCount").hidden = n === 0;
-    $("btnReviewPanel").textContent = n ? `🧠 Review ${n} ${n === 1 ? "word" : "words"} now` : "🧠 Review (nothing due)";
+    const nl = toLearn().length, nd = dueList().length;
+    $("btnReviewPanel").textContent = n ? `🧠 Learn & review (${nl ? nl + " new" : ""}${nl && nd ? ", " : ""}${nd ? nd + " to review" : ""})` : "🧠 Learn & review (nothing due)";
   }
   $("btnReviewPanel").onclick = () => { closePanels(); openReview(); };
   updateReviewBadge();
   setInterval(updateReviewBadge, 60000);
+
+  // ----- AI helper settings (key stays on this device, never exported) -----
+  function openAISetup() {
+    const a = db.settings.ai;
+    $("aiProvider").value = a.provider || "gemini"; $("aiKey").value = a.key || ""; $("aiModel").value = a.model || "";
+    $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; $("aiTest").textContent = "";
+    const d = $("dlgAI"); if (d.showModal) d.showModal(); else d.setAttribute("open", "");
+  }
+  $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && rv.queue[rv.i].kind === "learn") showCard(); });
+  $("aiProvider").onchange = () => { $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; };
+  $("btnAISetup").onclick = openAISetup;
+  $("aiSave").onclick = async () => {
+    db.settings.ai = { provider: $("aiProvider").value, key: $("aiKey").value.trim(), model: $("aiModel").value.trim() };
+    save();
+    if (!db.settings.ai.key) { $("aiTest").textContent = "AI helper is off."; return; }
+    $("aiTest").textContent = "Testing…";
+    try {
+      const r = await askAI('Reply with JSON only: {"ok": true, "hello": "a one-line friendly greeting for an English learner"}', true);
+      $("aiTest").textContent = "✅ Works! " + (r.hello || "");
+    } catch (e) { $("aiTest").textContent = "❌ " + e.message + " – check the key and model."; }
+  };
 
   // ---------- start ----------
   applySettings();
@@ -1309,7 +1535,7 @@
     if (m && book.sections[+m[1]] && (!db.last || db.last.s !== +m[1])) renderSection(+m[1]);
     else if (db.last && book.sections[db.last.s]) { renderSection(db.last.s, db.last.p, true); toast("Welcome back – continuing where you stopped"); }
     else renderSection(0);
-    if (storageOk && db.settings.autoReview && dueList().length) setTimeout(openReview, 700);
+    if (storageOk && db.settings.autoReview && (dueList().length || toLearn().length)) setTimeout(openReview, 700);
     if (!storageOk) setTimeout(() => toast("This preview can\u2019t save bookmarks or words. Download the file and open it in your browser to save."), 600);
   }).catch((e) => {
     $("page").innerHTML = `<p class="loading">Could not open the book (${esc(e.message)}). Please reload the page.</p>`;

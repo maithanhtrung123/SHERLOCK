@@ -76,7 +76,8 @@
 <aside id="panelVocab" class="panel wide" hidden aria-label="My vocabulary">
   <div class="phead"><h2>My vocabulary</h2><button class="x" data-close>×</button></div>
   <div class="vtools">
-    <button id="btnReviewPanel" class="btn primary block">🧠 Review</button>
+    <button id="btnReviewPanel" class="btn primary block">🧠 Learn &amp; review</button>
+    <button id="btnAISetup" class="btn">✨ AI helper</button>
     <button id="btnExport" class="btn primary">⬇ Export for AI (.md)</button>
     <button id="btnCopy" class="btn">Copy for AI</button>
     <label class="chk"><input type="checkbox" id="onlyNew"> Only words not exported yet</label>
@@ -141,10 +142,30 @@
 </dialog>
 
 <dialog id="dlgReview" class="dlg review">
-  <div class="rv-top"><h3>Daily review</h3><div id="rvHead" class="rv-head"></div><button class="x" data-close-review aria-label="Close">×</button></div>
+  <div class="rv-top"><h3>Learn &amp; review</h3><div id="rvHead" class="rv-head"></div><button class="x" data-close-review aria-label="Close">×</button></div>
   <div id="rvBody"></div>
   <div id="rvActions" class="rv-actions"></div>
-  <label class="chk rv-auto"><input type="checkbox" id="rvAuto"> Show review when I open the app</label>
+  <label class="chk rv-auto"><input type="checkbox" id="rvAuto"> Open this when I start the app</label>
+</dialog>
+
+<dialog id="dlgAI" class="dlg">
+  <form method="dialog">
+    <h3>✨ AI helper</h3>
+    <p class="hint">With your own AI key, the app explains each word in its sentence, translates it and gives feedback when you make a mistake. Without a key, meanings come from a free dictionary.</p>
+    <label>AI service
+      <select id="aiProvider">
+        <option value="deepseek">DeepSeek</option>
+        <option value="gemini">Google Gemini (has a free tier)</option>
+        <option value="claude">Claude (Anthropic)</option>
+        <option value="openai">OpenAI</option>
+      </select>
+    </label>
+    <label>API key<input id="aiKey" type="password" autocomplete="off" placeholder="Paste your key here"></label>
+    <label>Model (optional)<input id="aiModel" autocomplete="off"></label>
+    <p class="hint">🔒 The key is saved only in this browser on this device. It is never put in your exported progress file. Each request is sent straight from your device to the AI service you chose and uses your account's credit.</p>
+    <p id="aiTest" class="hint"></p>
+    <div class="row"><button value="cancel" class="btn" formnovalidate>Close</button><button type="button" class="btn primary" id="aiSave">Save &amp; test</button></div>
+  </form>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
