@@ -26,7 +26,7 @@
   let toastTimer;
   function toast(msg) {
     const t = $("toast"); t.textContent = msg; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), Math.max(2600, msg.length * 60));
   }
 
   // Text of a node with <br> as newline.
@@ -126,7 +126,7 @@
       }
     } else window.scrollTo(0, 0);
     updateStatus();
-    if (history.replaceState) history.replaceState(null, "", "#s" + id);
+    try { history.replaceState(null, "", "#s" + id); } catch (e) { /* sandboxed preview: no URL updates */ }
   }
 
   const topOffset = () => document.querySelector(".topbar").offsetHeight;
@@ -582,12 +582,16 @@
   // ---------- start ----------
   applySettings();
   updateCount();
+  let storageOk = true;
+  try { localStorage.setItem(KEY + "-test", "1"); localStorage.removeItem(KEY + "-test"); } catch (e) { storageOk = false; }
   loadBook().then((b) => {
     book = b;
-    const m = location.hash.match(/^#s(\d+)$/);
+    let m = null;
+    try { m = location.hash.match(/^#s(\d+)$/); } catch (e) {}
     if (m && book.sections[+m[1]] && (!db.last || db.last.s !== +m[1])) renderSection(+m[1]);
     else if (db.last && book.sections[db.last.s]) { renderSection(db.last.s, db.last.p, true); toast("Welcome back – continuing where you stopped"); }
     else renderSection(0);
+    if (!storageOk) setTimeout(() => toast("This preview can\u2019t save bookmarks or words. Download the file and open it in your browser to save."), 600);
   }).catch((e) => {
     $("page").innerHTML = `<p class="loading">Could not open the book (${esc(e.message)}). Please reload the page.</p>`;
   });
