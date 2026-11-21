@@ -320,7 +320,7 @@
   function hideFloat() { fl.hidden = true; pending = null; document.querySelectorAll("p.sel").forEach((x) => x.classList.remove("sel")); }
   function hideFloatIfTap() { if (pending && !pending.word) hideFloat(); }
   function showFloat(rect, withSave) {
-    $("fSave").hidden = !withSave; $("fAsk").hidden = !withSave;
+    $("fSave").hidden = !withSave; $("fAsk").hidden = !withSave; $("fTrans").hidden = !withSave;
     fl.hidden = false;
     const w = fl.offsetWidth, h = fl.offsetHeight;
     let x = rect.left + rect.width / 2 - w / 2 + window.scrollX;
@@ -387,21 +387,92 @@
     window.getSelection().removeAllRanges();
   };
 
+  // ---------- translate selected text (AI in context, dictionary fallback) ----------
+  let tr = null;   // {word, start, sentence, paragraph, s, p, path, info}
+  function selContext() {
+    const { p, word, start, end } = pending;
+    const text = textOf(p);
+    return { word, start, sentence: sentenceAround(text, start, end), paragraph: text.replace(/\s+/g, " ").trim(), s: cur, p: +p.dataset.p, path: pathText(book.sections[cur]) };
+  }
+  const markIn = (sentence, word) => esc(sentence).replace(esc(word), `<mark>${esc(word)}</mark>`);
+  $("fTrans").onclick = async () => {
+    if (!pending || !pending.word) return;
+    const me = selContext();
+    hideFloat(); window.getSelection().removeAllRanges();
+    lookupTr(me);
+  };
+  async function lookupTr(me) {
+    tr = me;
+    $("trQuote").innerHTML = markIn(me.sentence, me.word) + `<cite>${esc(me.path)}</cite>`;
+    $("trBody").innerHTML = `<p class="hint">${aiReady() ? "✨ AI is reading the sentence…" : "Looking it up…"}</p>`;
+    if (!$("dlgTr").open) $("dlgTr").showModal();
+    const info = { word: me.word };
+    if (aiReady()) {
+      info.aiTried = true;
+      try {
+        const r = await askAI(`You help an English learner whose first language is ${langName()}. They are reading Sherlock Holmes (Victorian English).
+Selected text: "${me.word}"
+Sentence: "${me.sentence}"
+Reply with JSON only: {"translation": "${langName()} translation of the selected text as used in this sentence", "meaning": "what it means IN THIS SENTENCE, very simple English, max 20 words", "pos": "part of speech (or 'phrase')", "ipa": "IPA pronunciation if it is one word, else empty", "sentence_translation": "natural ${langName()} translation of the whole sentence", "other": "other common meanings, short, or empty", "tip": "one short ${langName()} tip (e.g. old-fashioned word, grammar), or empty"}`, true);
+        Object.assign(info, { vi: r.translation, meaning: r.meaning, pos: r.pos, ipa: r.ipa, sentenceVi: r.sentence_translation, other: r.other, tip: r.tip, meaningSrc: "ai" });
+      } catch (e) { info.err = "AI helper: " + e.message + " – showing the dictionary instead."; }
+    }
+    if (!info.meaning) {
+      const [d, vi, sv] = await Promise.all([me.word.split(" ").length <= 3 ? dictLookup(me.word) : null, translate(me.word), translate(me.sentence)]);
+      if (d) Object.assign(info, { defs: d.defs, ipa: d.ipa, meaning: d.defs[0].def, pos: d.defs[0].pos, meaningSrc: "dict" });
+      info.vi = vi; info.sentenceVi = sv;
+    }
+    if (tr !== me) return;   // another lookup started
+    me.info = info;
+    renderTr();
+  }
+  function renderTr() {
+    const i = tr.info; let h = "";
+    if (i.err) h += `<p class="hint">${esc(i.err)}</p>`;
+    h += `<div class="tr-word">${i.pos ? `<span class="pos">${esc(posShort(i.pos))}</span> ` : ""}<b>${esc(i.word)}</b> ${say(i.word)} ${i.ipa ? `<span class="ipa">${esc(i.ipa)}</span>` : ""}</div>`;
+    if (i.vi) h += `<div class="tr-vi">🇻🇳 ${esc(i.vi)}</div>`;
+    if (i.meaning) h += `<div class="rv-mean"><b>In this sentence:</b> ${esc(i.meaning)} <span class="tag">${i.meaningSrc === "ai" ? "AI" : "dictionary"}</span></div>`;
+    else if (!i.vi) h += `<p class="hint">No meaning found. ${aiReady() ? "" : `<button class="link" data-ai-setup>✨ Set up AI helper</button> for meanings in context.`}</p>`;
+    if (i.meaningSrc === "dict" && i.defs && i.defs.length > 1)
+      h += `<details class="others"><summary>Other dictionary meanings</summary>` + i.defs.slice(1).map((d) => `<div class="def"><i>${esc(posShort(d.pos))}</i> ${esc(d.def)}</div>`).join("") + `</details>`;
+    if (i.other) h += `<div class="tr-other"><b>Other meanings:</b> ${esc(i.other)}</div>`;
+    if (i.tip) h += `<div class="tr-other">💡 ${esc(i.tip)}</div>`;
+    if (i.sentenceVi) h += `<div class="tr-sent"><b>Whole sentence:</b> ${esc(i.sentenceVi)}</div>`;
+    if (!aiReady() && i.meaning) h += `<p class="hint">Dictionary meanings may not fit this sentence. <button class="link" data-ai-setup>✨ Set up AI helper</button> for a meaning in context.</p>`;
+    $("trBody").innerHTML = h;
+  }
+  $("dlgTr").addEventListener("click", (e) => {
+    const t = e.target;
+    if (t === $("dlgTr") || t.matches("[data-close-tr]")) $("dlgTr").close();
+    else if (t.dataset.say) sayText(t.dataset.say);
+    else if (t.matches("[data-ai-setup]")) openAISetup();
+  });
+  $("trSave").onclick = () => {
+    if (!tr) return;
+    const dup = db.vocab.find((v) => v.word.toLowerCase() === tr.word.toLowerCase());
+    $("dlgTr").close();
+    openSaveDialog({ word: tr.word, sentence: tr.sentence, paragraph: tr.paragraph, s: tr.s, p: tr.p, off: tr.start, path: tr.path, info: tr.info }, dup);
+  };
+  $("trAsk").onclick = () => { if (!tr) return; $("dlgTr").close(); openAsk(tr); };
+
   // ---------- ask AI about selected text ----------
   let ask = null;   // {word, sentence, paragraph, path, msgs, ctx}
   $("fAsk").onclick = () => {
     if (!pending || !pending.word) return;
-    const { p, word, start, end } = pending;
-    const text = textOf(p);
-    ask = { word, start, sentence: sentenceAround(text, start, end), paragraph: text.replace(/\s+/g, " ").trim(), s: cur, p: +p.dataset.p, path: pathText(book.sections[cur]), msgs: [] };
+    const c = selContext();
     hideFloat(); window.getSelection().removeAllRanges();
+    openAsk(c);
+  };
+  function openAsk(c) {
+    ask = Object.assign({}, c, { msgs: [] });
+    const word = ask.word;
     $("askQuote").innerHTML = esc(ask.sentence).replace(esc(word), `<mark>${esc(word)}</mark>`) + `<cite>${esc(ask.path)}</cite>`;
     $("askLog").innerHTML = aiReady() ? "" : `<p class="hint">To ask questions, add your AI key first (DeepSeek, Gemini, Claude or OpenAI). <button class="link" data-ai-setup>✨ Set up AI helper</button></p>`;
     $("askInput").value = "";
     $("askQuick").hidden = false;
     $("dlgAsk").showModal();
     if (aiReady()) setTimeout(() => $("askInput").focus(), 50);
-  };
+  }
   function askSend(q) {
     q = (q || "").trim();
     if (!q || !ask) return;
@@ -470,6 +541,11 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
       s: draft.s, p: draft.p, off: word === draft.word ? draft.off : null, path: draft.path,
       note: $("sNote").value.trim(), at: Date.now(), exported: false,
     });
+    const info = draft.info;
+    if (info && word === draft.word) {
+      const v = db.vocab[0];
+      ["meaning", "pos", "vi", "ipa", "defs", "meaningSrc", "tip", "aiTried"].forEach((k) => { if (info[k]) v[k] = info[k]; });
+    }
     save(); draft = null;
     updateCount(); markVocab(); updateStatus();
     enrich(db.vocab[0]);   // fetch the meaning in the background
@@ -1615,7 +1691,8 @@ Keep it under 90 words.`);
     $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; $("aiTest").textContent = "";
     const d = $("dlgAI"); if (d.showModal) d.showModal(); else d.setAttribute("open", "");
   }
-  $("dlgAI").addEventListener("close", () => { if ($("dlgAsk").open && aiReady() && !ask.msgs.length) { $("askLog").innerHTML = ""; $("askInput").focus(); } });
+  $("dlgAI").addEventListener("close", () => { if ($("dlgTr").open && tr && tr.info && aiReady() && tr.info.meaningSrc !== "ai") lookupTr(tr);
+    else if ($("dlgAsk").open && aiReady() && !ask.msgs.length) { $("askLog").innerHTML = ""; $("askInput").focus(); } });
   $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && rv.queue[rv.i].kind === "learn") showCard(); });
   $("aiProvider").onchange = () => { $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; };
   $("btnAISetup").onclick = openAISetup;

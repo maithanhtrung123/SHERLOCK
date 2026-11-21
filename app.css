@@ -100,7 +100,7 @@ body.dark .page img { filter: invert(.88); }
 
 /* ---- floating toolbar ---- */
 .float {
-  position: absolute; z-index: 30; display: flex; gap: 6px; padding: 6px;
+  position: absolute; z-index: 30; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding: 6px; max-width: calc(100vw - 16px); box-sizing: border-box;
   background: var(--page); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
   font-family: system-ui, sans-serif;
 }
@@ -109,7 +109,8 @@ body.dark .page img { filter: invert(.88); }
 @media (pointer: coarse) {
   .float { position: fixed; left: 50% !important; top: auto !important; transform: translateX(-50%);
            bottom: calc(var(--bottom) + env(safe-area-inset-bottom) + 14px); }
-  .fbtn { padding: 12px 16px; font-size: 15px; }
+  .float { width: max-content; }
+  .fbtn { padding: 11px 14px; font-size: 15px; }
 }
 
 /* ---- panels ---- */
@@ -335,3 +336,13 @@ details.others summary { color: var(--accent); cursor: pointer; }
 .dlg.ask > :not(.rv-top) { margin-left: 16px; margin-right: 16px; }
 .dlg.ask .ask-quote { margin-top: 12px; }
 .dlg.ask .ask-foot { margin-bottom: 12px; }
+
+/* translate */
+.tr-body { font-size: 15px; line-height: 1.5; }
+.tr-word { font-size: 22px; margin: 6px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tr-word .pos { margin: 0; }
+.tr-vi { font-size: 18px; font-weight: 600; color: var(--accent); margin: 4px 0 8px; }
+.tr-other, .tr-sent { margin: 8px 0; font-size: 14px; }
+.tr-sent { padding: 8px 10px; background: var(--accent-soft); border-radius: 6px; }
+.tr-body .def { cursor: default; }
+.tr-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; margin-bottom: 14px; }

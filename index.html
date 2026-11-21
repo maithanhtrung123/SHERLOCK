@@ -55,6 +55,7 @@
 <!-- floating toolbar shown on selection / tap -->
 <div id="float" class="float" hidden>
   <button id="fSave" class="fbtn primary">＋ Save word</button>
+  <button id="fTrans" class="fbtn">🌐 Translate</button>
   <button id="fAsk" class="fbtn">✨ Ask AI</button>
   <button id="fRead" class="fbtn">🔊 Read from here</button>
   <button id="fMark" class="fbtn">🔖 Bookmark here</button>
@@ -167,6 +168,16 @@
     <p id="aiTest" class="hint"></p>
     <div class="row"><button value="cancel" class="btn" formnovalidate>Close</button><button type="button" class="btn primary" id="aiSave">Save &amp; test</button></div>
   </form>
+</dialog>
+
+<dialog id="dlgTr" class="dlg ask tr">
+  <div class="rv-top"><h3>🌐 Translate</h3><button class="x" data-close-tr aria-label="Close">×</button></div>
+  <blockquote id="trQuote" class="ask-quote"></blockquote>
+  <div id="trBody" class="tr-body"></div>
+  <div class="row tr-actions">
+    <button type="button" class="btn" id="trAsk">✨ Ask AI more</button>
+    <button type="button" class="btn primary" id="trSave">＋ Save word</button>
+  </div>
 </dialog>
 
 <dialog id="dlgAsk" class="dlg ask">
