@@ -79,6 +79,7 @@
   <div class="phead"><h2>My vocabulary</h2><button class="x" data-close>×</button></div>
   <div class="vtools">
     <button id="btnReviewPanel" class="btn primary block">🧠 Learn &amp; review</button>
+    <button id="btnPlan" class="btn">📅 Study plan</button>
     <button id="btnAISetup" class="btn">✨ AI helper</button>
     <button id="btnExport" class="btn primary">⬇ Export for AI (.md)</button>
     <button id="btnCopy" class="btn">Copy for AI</button>
@@ -145,10 +146,23 @@
 </dialog>
 
 <dialog id="dlgReview" class="dlg review">
-  <div class="rv-top"><h3>Learn &amp; review</h3><div id="rvHead" class="rv-head"></div><button class="x" data-close-review aria-label="Close">×</button></div>
+  <div class="rv-top"><h3>Learn &amp; review</h3><div id="rvHead" class="rv-head"></div><button class="pl-btn" id="rvPlan" title="Study plan">📅</button><button class="x" data-close-review aria-label="Close">×</button></div>
   <div id="rvBody"></div>
   <div id="rvActions" class="rv-actions"></div>
   <label class="chk rv-auto"><input type="checkbox" id="rvAuto"> Open this when I start the app</label>
+</dialog>
+
+<dialog id="dlgPlan" class="dlg">
+  <form method="dialog">
+    <h3>📅 Study plan</h3>
+    <p class="hint">Words you save start automatically the next morning. Choose how many <b>new</b> words to start each day. Reviews of words you already know always come too.</p>
+    <label class="chk"><input type="radio" name="planMode" value="all"> Same number every day</label>
+    <label id="planAllRow" class="plan-row">New words per day <select id="planAll"></select></label>
+    <label class="chk"><input type="radio" name="planMode" value="days"> Plan each day of the week</label>
+    <div id="planDays" class="plan-days"></div>
+    <p id="planInfo" class="hint plan-info"></p>
+    <div class="row"><button value="ok" class="btn primary">Done</button></div>
+  </form>
 </dialog>
 
 <dialog id="dlgAI" class="dlg">

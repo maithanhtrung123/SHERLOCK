@@ -349,3 +349,13 @@ details.others summary { color: var(--accent); cursor: pointer; }
 .tr-mean { font-size: 18px; line-height: 1.45; font-family: var(--font); margin: 6px 0 8px; }
 .vi-show { display: inline-block; margin: 6px 0; font-size: 14px; }
 .vi-wrap[hidden] { display: none !important; }
+
+/* study plan */
+.pl-btn { border: 0; background: none; font-size: 20px; cursor: pointer; padding: 4px; margin-left: auto; }
+.pl-btn + .x { margin-left: 0; }
+.plan-row { display: flex; align-items: center; gap: 10px; margin-left: 26px; }
+.plan-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-left: 26px; }
+.pday { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.plan-days[hidden], .plan-row[hidden] { display: none !important; }
+.dlg select { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--page); color: var(--ink); }
+.plan-info { padding: 8px 10px; background: var(--accent-soft); border-radius: 6px; color: var(--ink); }

@@ -139,25 +139,56 @@
     });
   }
 
+  // Underline every place a saved word appears in this chapter (also simple forms: -s, -ed, -ing…).
+  function wordForms(w) {
+    w = w.toLowerCase().replace(/[’]/g, "'").trim();
+    const out = new Set([w]);
+    if (/\s/.test(w) || w.length < 3) return out;          // phrases and tiny words: exact only
+    const bases = new Set([w]);
+    const strip = [[/ies$/, "y"], [/ied$/, "y"], [/ing$/, ""], [/ing$/, "e"], [/ed$/, ""], [/ed$/, "e"], [/es$/, ""], [/s$/, ""], [/ly$/, ""]];
+    strip.forEach(([re, rep]) => { if (re.test(w)) { const b = w.replace(re, rep); if (b.length >= 4) bases.add(b); } });
+    bases.forEach((b) => {
+      out.add(b); out.add(b + "s"); out.add(b + "'s");
+      if (/e$/.test(b)) { out.add(b + "d"); out.add(b.slice(0, -1) + "ing"); out.add(b + "r"); }
+      else if (/[^aeiou]y$/.test(b)) { out.add(b.slice(0, -1) + "ies"); out.add(b.slice(0, -1) + "ied"); out.add(b + "ing"); }
+      else { out.add(b + "ed"); out.add(b + "ing"); out.add(b + "es"); out.add(b + "ly");
+        if (/[^aeiou][aeiou][bdgmnprt]$/.test(b)) { out.add(b + b.slice(-1) + "ed"); out.add(b + b.slice(-1) + "ing"); } }
+    });
+    return out;
+  }
   function markVocab() {
-    db.vocab.filter((v) => v.s === cur).forEach((v) => {
-      const p = $("page").querySelector(`p[data-p="${v.p}"]`);
-      if (!p || p.querySelector(`[data-v="${v.id}"]`)) return;
-      const text = textOf(p);
-      let off = v.off;
-      if (off == null || text.substr(off, v.word.length).toLowerCase() !== v.word.toLowerCase()) {
-        off = text.toLowerCase().indexOf(v.word.toLowerCase());
-        if (off < 0) return;
-      }
-      const a = posAt(p, off), b = posAt(p, off + v.word.length);
-      if (!a || !b) return;
-      try {
-        const r = document.createRange();
-        r.setStart(a[0], a[1]); r.setEnd(b[0], b[1]);
-        const span = document.createElement("span");
-        span.className = "vw"; span.dataset.v = v.id; span.title = "In your vocabulary" + (v.note ? ": " + v.note : "");
-        r.surroundContents(span);
-      } catch (e) { /* crosses formatting – skip underline */ }
+    const page = $("page");
+    page.querySelectorAll("span.vw").forEach((sp) => sp.replaceWith(...sp.childNodes));
+    page.normalize();
+    const map = new Map();   // form -> vocab item
+    db.vocab.slice().reverse().forEach((v) => wordForms(v.word).forEach((f) => map.set(f, v)));
+    if (!map.size) return;
+    const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "['’]").replace(/ /g, "\\s+");
+    const alts = [...map.keys()].sort((a, b) => b.length - a.length).map(escRe);
+    const re = new RegExp(`(^|[^\\p{L}'’-])(${alts.join("|")})(?![\\p{L}-])`, "giu");   // no look-behind: older iPhones
+    const keyOf = (m) => m.toLowerCase().replace(/’/g, "'").replace(/\s+/g, " ");
+    page.querySelectorAll("p[data-p]").forEach((p) => {
+      const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+      const nodes = []; let n;
+      while ((n = walker.nextNode())) nodes.push(n);
+      nodes.forEach((node) => {
+        const t = node.data; re.lastIndex = 0;
+        let m, last = 0; const frag = document.createDocumentFragment(); let hit = false;
+        while ((m = re.exec(t))) {
+          const v = map.get(keyOf(m[2])); if (!v) continue;
+          const at = m.index + m[1].length;
+          hit = true;
+          frag.append(t.slice(last, at));
+          const span = document.createElement("span");
+          span.className = "vw"; span.dataset.v = v.id; span.title = "In your vocabulary" + (v.note ? ": " + v.note : "");
+          span.textContent = m[2];
+          frag.append(span);
+          last = at + m[2].length;
+        }
+        if (!hit) return;
+        frag.append(t.slice(last));
+        node.replaceWith(frag);
+      });
     });
   }
 
@@ -593,7 +624,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     if (e.target.matches("[data-go]")) { closePanels(); renderSection(v.s, v.p, true); }
     if (e.target.matches("[data-del]")) {
       if (!confirmDelete(item)) return;
-      db.vocab = db.vocab.filter((x) => x.id !== v.id); save(); updateCount(); buildVocab();
+      db.vocab = db.vocab.filter((x) => x.id !== v.id); save(); updateCount(); buildVocab(); markVocab();
       if (v.s === cur) renderSection(cur, visiblePara() && +visiblePara().dataset.p);
     }
   });
@@ -765,10 +796,11 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     (data.bookmarks || []).forEach((b) => { if (!hb.has(b.id)) db.bookmarks.push(b); });
     Object.entries(data.furthest || {}).forEach(([k, v]) => { if (!db.furthest[k] || db.furthest[k] < v) db.furthest[k] = v; });
     if (data.last && (!db.last || (data.lastAt || 0) > (db.lastAt || 0))) { db.last = data.last; db.lastAt = data.lastAt || Date.now(); }
-    ["reviewLog", "readLog"].forEach((k) => {
+    ["reviewLog", "readLog", "newLog"].forEach((k) => {
       db[k] = db[k] || {};
       Object.entries(data[k] || {}).forEach(([d, n]) => { db[k][d] = Math.max(db[k][d] || 0, n); });
     });
+    if (data.settings && data.settings.plan && !db.settings.planSet) db.settings.plan = data.settings.plan;
     return added;
   }
   $("fileImport").onchange = async (e) => {
@@ -1320,7 +1352,21 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
   const srsOf = (v) => (v.srs = v.srs || { due: 0, ivl: 0, ease: 2.5, reps: 0, lapses: 0 });
   // words saved before "learn first" existed and already reviewed count as learned
   db.vocab.forEach((v) => { if (v.learned === undefined && v.srs && v.srs.reps > 0) v.learned = true; });
-  const toLearn = () => db.vocab.filter((v) => !v.learned).sort((a, b) => a.at - b.at);
+  // New words: saved on an earlier day start automatically (no "I understand" needed), limited by the study plan.
+  db.newLog = db.newLog || {};               // "YYYY-MM-DD" -> new words started that day
+  db.settings.plan = db.settings.plan || { mode: "all", all: 20, days: {} };
+  const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  function quotaFor(d) {   // d: Date -> number of new words that day (Infinity = no limit)
+    const p = db.settings.plan;
+    const q = p.mode === "days" ? (p.days[d.getDay()] ?? p.all) : p.all;
+    return q === 0 || q === "all" ? Infinity : +q;
+  }
+  const waitingNew = () => db.vocab.filter((v) => !v.learned).sort((a, b) => a.at - b.at);
+  let extraToday = false;   // "learn today's words now" was tapped
+  const toLearn = () => {
+    const left = Math.max(0, quotaFor(new Date()) - (db.newLog[today()] || 0));
+    return waitingNew().filter((v) => extraToday || v.at < startOfToday()).slice(0, left);
+  };
   const dueList = () => db.vocab.filter((v) => v.learned && srsOf(v).due <= Date.now()).sort((a, b) => a.srs.due - b.srs.due);
   function nextMorning() { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(5, 0, 0, 0); return d.getTime(); }
   function streak() {
@@ -1512,7 +1558,7 @@ ${showVi() ? `- a ${langName()} note in one line
   }
   function startSession() {
     const learn = toLearn(), due = dueList();
-    rv.queue = [...learn.map((v) => ({ v, kind: "learn" })), ...shuffle(due.slice(0, 30)).map((v) => ({ v, kind: quizType(v) }))];
+    rv.queue = [...shuffle(due.slice(0, 200)).map((v) => ({ v, kind: quizType(v) })), ...learn.map((v) => ({ v, kind: "learn" }))];
     rv.i = 0; rv.done = 0;
     learn.forEach((v) => enrich(v).then(() => { const c = rv.queue[rv.i]; if (c && c.v === v && c.kind === "learn") showCard(); }));
   }
@@ -1547,8 +1593,13 @@ ${showVi() ? `- a ${langName()} note in one line
     rv.answered = false;
     if (!c) {
       const next = db.vocab.filter((x) => x.learned).map((x) => srsOf(x).due).filter((d) => d > Date.now()).sort((a, b) => a - b)[0];
+      const savedToday = waitingNew().filter((x) => x.at >= startOfToday()).length;
+      const waiting = waitingNew().length, q = quotaFor(new Date()), started = db.newLog[today()] || 0;
       body.innerHTML = db.vocab.length
-        ? `<div class="rv-done"><div class="big">🎉</div><p><b>All done for now!</b></p><p class="hint">${rv.done ? `You practised ${rv.done} ${rv.done === 1 ? "word" : "words"}. ` : ""}${next ? "Next review: " + new Date(next).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}</p></div>`
+        ? `<div class="rv-done"><div class="big">🎉</div><p><b>All done for now!</b></p><p class="hint">${rv.done ? `You practised ${rv.done} ${rv.done === 1 ? "word" : "words"}. ` : ""}${next ? "Next review: " + new Date(next).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}</p>
+          <p class="hint">📅 Today: ${started} of ${q === Infinity ? "no limit" : q} new words started.${waiting ? ` ${waiting} ${waiting === 1 ? "word is" : "words are"} waiting${savedToday ? ` (${savedToday} saved today start tomorrow)` : ""}.` : ""}</p>
+          ${waiting ? `<p><button class="btn" data-learn-now>Learn ${Math.min(waiting, 10)} more now</button></p>` : ""}
+          <button class="link" data-plan>📅 Change my study plan</button></div>`
         : `<div class="rv-done"><p><b>No words yet.</b></p><p class="hint">Select a word while reading → ＋ Save word. You will learn it here first, then practise it from the next morning.</p></div>`;
       $("rvActions").innerHTML = `<button class="btn primary wide" data-close-review>Back to reading</button>`;
       return;
@@ -1562,7 +1613,7 @@ ${showVi() ? `- a ${langName()} note in one line
         <blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>
         ${meaningBlock(v)}
         <div class="rv-ai">${aiReady() ? `<button class="btn small" data-ai-explain>✨ Ask AI to explain</button>` : `<button class="link" data-ai-setup>✨ Turn on the AI helper for better explanations</button>`}<div class="ai-out" id="aiOut"></div></div></div>`;
-      $("rvActions").innerHTML = `<button class="btn" data-skip>Later</button><button class="btn primary span3" data-learned>✓ I understand</button>`;
+      $("rvActions").innerHTML = `<button class="btn" data-skip>Later</button><button class="btn primary span3" data-learned>Next → practise it</button>`;
       return;
     }
     const m = meaningOf(v);
@@ -1658,11 +1709,22 @@ ${showVi() ? `- a ${langName()} note in one line
     }
     else if (t.matches("[data-learned]")) {
       v.learned = true; v.learnedAt = Date.now();
-      Object.assign(srsOf(v), { due: nextMorning(), ivl: 0, reps: 0 });
+      Object.assign(srsOf(v), { due: Date.now(), ivl: 0, reps: 0 });
+      db.newLog[today()] = (db.newLog[today()] || 0) + 1;
       db.reviewLog[today()] = (db.reviewLog[today()] || 0) + 1;
+      // practise it a few cards later in this session (or right away if it is the last one)
+      const pos = Math.min(rv.queue.length, rv.i + 4);
+      rv.queue.splice(pos, 0, { v, kind: meaningOf(v) ? "mc" : "fill" });
       save(); rv.done++; rv.i++; showCard(); updateReviewBadge();
-      toast(`“${v.word}” learned – first review tomorrow morning`);
     } else if (t.matches("[data-skip]")) { rv.i++; showCard(); }
+    else if (t.matches("[data-plan]")) openPlan();
+    else if (t.matches("[data-learn-now]")) {
+      extraToday = true;
+      const more = waitingNew().filter((x) => !rv.queue.some((c) => c.v === x)).slice(0, 10);
+      rv.queue.push(...more.map((x) => ({ v: x, kind: "learn" })));
+      more.forEach((x) => enrich(x).then(() => { const c = rv.queue[rv.i]; if (c && c.v === x && c.kind === "learn") showCard(); }));
+      showCard();
+    }
     else if (t.dataset.def) { const d = v.defs[+t.dataset.def]; v.meaning = d.def; v.pos = d.pos; v.example = v.example || d.ex || ""; v.meaningSrc = "dict"; save(); showCard(); }
     else if (t.dataset.opt !== undefined) answer(t.dataset.opt);
     else if (t.matches("[data-next]")) { rv.i++; showCard(); }
@@ -1696,6 +1758,44 @@ ${showVi() ? `- a ${langName()} note in one line
   $("btnReviewPanel").onclick = () => { closePanels(); openReview(); };
   updateReviewBadge();
   setInterval(updateReviewBadge, 60000);
+
+  // ----- study plan: new words per day -----
+  const PLAN_OPTS = [20, 40, 60, 80, 100, 120, 140, 150, 0];
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const optHTML = (val) => PLAN_OPTS.map((n) => `<option value="${n}"${+val === n ? " selected" : ""}>${n ? n + " words" : "No limit"}</option>`).join("");
+  function planForecast() {
+    const waiting = waitingNew().length;
+    if (!waiting) return "No new words waiting. Words you save start the next morning.";
+    let left = waiting, days = 0;
+    const d = new Date();
+    const readyToday = waitingNew().filter((v) => v.at < startOfToday()).length;   // today's saves start tomorrow
+    left -= Math.min(readyToday, Math.max(0, quotaFor(d) - (db.newLog[today()] || 0)));
+    while (left > 0 && days < 999) { days++; d.setDate(d.getDate() + 1); left -= quotaFor(d); }
+    return `${waiting} new ${waiting === 1 ? "word" : "words"} waiting. With this plan they are all started ${days === 0 ? "today" : days === 1 ? "by tomorrow" : `in about ${days} days`}. Reviews of older words always come too.`;
+  }
+  function openPlan() {
+    const p = db.settings.plan;
+    $("planAll").innerHTML = optHTML(p.all);
+    $("planDays").innerHTML = [1, 2, 3, 4, 5, 6, 0].map((i) => `<label class="pday">${DAYS[i]}<select data-day="${i}">${optHTML(p.days[i] ?? p.all)}</select></label>`).join("");
+    document.querySelector(`input[name=planMode][value=${p.mode}]`).checked = true;
+    planUI();
+    $("dlgPlan").showModal();
+  }
+  function planUI() {
+    const p = db.settings.plan;
+    p.mode = document.querySelector("input[name=planMode]:checked").value;
+    p.all = +$("planAll").value;
+    $("planDays").querySelectorAll("select").forEach((s) => { p.days[s.dataset.day] = +s.value; });
+    $("planAllRow").hidden = p.mode !== "all";
+    $("planDays").hidden = p.mode !== "days";
+    $("planInfo").textContent = planForecast();
+    db.settings.planSet = true;
+    save(); updateReviewBadge();
+  }
+  $("dlgPlan").addEventListener("change", planUI);
+  $("dlgPlan").addEventListener("close", () => { if ($("dlgReview").open && !rv.queue[rv.i]) { startSession(); showCard(); } });
+  $("btnPlan").onclick = () => { closePanels(); openPlan(); };
+  $("rvPlan").onclick = openPlan;
 
   // ----- AI helper settings (key stays on this device, never exported) -----
   function openAISetup() {
