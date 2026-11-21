@@ -418,7 +418,7 @@
   });
 
   // ---------- vocabulary panel ----------
-  function updateCount() { $("vocabCount").textContent = db.vocab.length; }
+  function updateCount() { $("vocabCount").textContent = db.vocab.length; if (typeof updateReviewBadge === "function" && $("reviewCount")) updateReviewBadge(); }
   function highlight(sentence, word) {
     const i = sentence.toLowerCase().indexOf(word.toLowerCase());
     if (i < 0) return esc(sentence);
@@ -541,6 +541,7 @@
       (data.bookmarks || []).forEach((b) => { if (!hb.has(b.id)) db.bookmarks.push(b); });
       Object.entries(data.furthest || {}).forEach(([k, v]) => { if (!db.furthest[k] || db.furthest[k] < v) db.furthest[k] = v; });
       if (data.last && !db.last) db.last = data.last;
+      Object.entries(data.reviewLog || {}).forEach(([k, n]) => { db.reviewLog[k] = Math.max(db.reviewLog[k] || 0, n); });
       save(); updateCount(); buildVocab(); renderSection(cur);
       toast("Backup restored");
     } catch (err) { toast("That file is not a Sherlock Reader backup"); }
@@ -1069,6 +1070,134 @@
   loadAudioMap();
   if (!synth && !("Audio" in window)) { $("btnListen").hidden = true; $("fRead").hidden = true; }
 
+  // ---------- daily review (spaced repetition, like Anki) ----------
+  const DAY = 86400000;
+  db.reviewLog = db.reviewLog || {};          // "YYYY-MM-DD" -> cards reviewed that day
+  if (db.settings.autoReview === undefined) db.settings.autoReview = true;
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const srsOf = (v) => (v.srs = v.srs || { due: 0, ivl: 0, ease: 2.5, reps: 0, lapses: 0 });
+  const dueList = () => db.vocab.filter((v) => srsOf(v).due <= Date.now()).sort((a, b) => a.srs.due - b.srs.due);
+  function streak() {
+    let n = 0;
+    const d = new Date();
+    if (!db.reviewLog[today()]) d.setDate(d.getDate() - 1);   // today not done yet: count up to yesterday
+    for (;;) {
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!db.reviewLog[k]) return n;
+      n++; d.setDate(d.getDate() - 1);
+    }
+  }
+  // next interval (days) for each answer; 0 = again in 10 minutes
+  function nextIvl(s, grade) {
+    if (grade === 0) return 0;
+    if (grade === 1) return Math.max(1, Math.round(s.ivl * 1.2));
+    if (grade === 2) return s.reps === 0 ? 1 : s.reps === 1 ? 3 : Math.max(s.ivl + 1, Math.round(s.ivl * s.ease));
+    return s.reps === 0 ? 4 : Math.max(s.ivl + 2, Math.round(s.ivl * s.ease * 1.3));
+  }
+  const ivlText = (d) => d === 0 ? "10 min" : d < 30 ? d + (d === 1 ? " day" : " days") : d < 365 ? Math.round(d / 30) + " mo" : (d / 365).toFixed(1) + " yr";
+  function grade(v, g) {
+    const s = srsOf(v), ivl = nextIvl(s, g);
+    if (g === 0) { s.lapses++; s.reps = 0; s.ease = Math.max(1.3, s.ease - 0.2); s.due = Date.now() + 10 * 60000; }
+    else {
+      s.reps++; s.ivl = ivl; s.due = Date.now() + ivl * DAY - 3600000;   // an hour early so it shows the same time of day
+      if (g === 1) s.ease = Math.max(1.3, s.ease - 0.15);
+      if (g === 3) s.ease += 0.15;
+    }
+    db.reviewLog[today()] = (db.reviewLog[today()] || 0) + 1;
+    save();
+  }
+
+  const rv = { queue: [], i: 0, done: 0, shown: false };
+  function cloze(sentence, word) {
+    const i = sentence.toLowerCase().indexOf(word.toLowerCase());
+    if (i < 0) return esc(sentence);
+    const blank = word.replace(/\S/g, "_").replace(/_+/g, (m) => m.length > 3 ? "_".repeat(Math.min(m.length, 10)) : "___");
+    return esc(sentence.slice(0, i)) + `<span class="blank">${blank}</span>` + esc(sentence.slice(i + word.length));
+  }
+  function openReview() {
+    rv.queue = dueList().slice(0, 30); rv.i = 0; rv.done = 0;
+    const dlg = $("dlgReview");
+    if (!dlg.open) { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", ""); }
+    showCard();
+  }
+  function header() {
+    const s = streak();
+    $("rvHead").innerHTML = `<span>🔥 ${s} ${s === 1 ? "day" : "days"}</span><span>${rv.done} done · ${Math.max(0, rv.queue.length - rv.i)} left</span>`;
+  }
+  function showCard() {
+    header();
+    const v = rv.queue[rv.i];
+    const body = $("rvBody");
+    if (!v) {
+      const total = db.vocab.length, next = db.vocab.map((x) => srsOf(x).due).filter((d) => d > Date.now()).sort((a, b) => a - b)[0];
+      body.innerHTML = total
+        ? `<div class="rv-done"><div class="big">🎉</div><p><b>All done for now!</b></p><p class="hint">${rv.done ? `You reviewed ${rv.done} ${rv.done === 1 ? "word" : "words"}. ` : ""}${next ? "Next review: " + new Date(next).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}</p></div>`
+        : `<div class="rv-done"><p><b>No words yet.</b></p><p class="hint">Save words while reading (select a word → ＋ Save word). They will come back here to review.</p></div>`;
+      $("rvActions").innerHTML = `<button class="btn primary" data-close-review>Back to reading</button>`;
+      return;
+    }
+    const s = srsOf(v);
+    body.innerHTML = `<div class="rv-card">
+        <div class="rv-tag">${s.reps === 0 && !s.lapses ? "New word" : "Review"} · ${esc(v.path)}</div>
+        <p class="rv-q">${cloze(v.sentence, v.word)}</p>
+        <div class="rv-ans" hidden>
+          <div class="rv-word">${esc(v.word)} <button class="btn small" data-say-word title="Hear the word">🔊</button></div>
+          <blockquote>${highlight(v.sentence, v.word)} <button class="btn small" data-say-sent title="Hear the sentence">🔊</button></blockquote>
+          <label class="rv-note">Meaning / my note<input data-rv-note value="${esc(v.note || "")}" placeholder="Write the meaning here (e.g. from your AI)"></label>
+        </div>
+      </div>`;
+    $("rvActions").innerHTML = `<button class="btn primary wide" data-show>Show the word</button>`;
+  }
+  function showAnswer() {
+    const v = rv.queue[rv.i]; if (!v) return;
+    $("rvBody").querySelector(".rv-ans").hidden = false;
+    $("rvBody").querySelector(".rv-q").hidden = true;
+    const s = srsOf(v);
+    const b = (g, label, vi, cls) => `<button class="btn grade ${cls}" data-grade="${g}"><b>${label}</b><small>${vi} · ${ivlText(nextIvl(s, g))}</small></button>`;
+    $("rvActions").innerHTML = b(0, "Again", "Quên", "g0") + b(1, "Hard", "Khó", "g1") + b(2, "Good", "Nhớ", "g2") + b(3, "Easy", "Dễ", "g3");
+  }
+  function sayText(t) {
+    if (!synth) return;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(t);
+    const vv = allVoices.length ? (voiceFor(null).v) : null;
+    if (vv) u.voice = vv; u.lang = vv ? vv.lang : "en-GB"; u.rate = Math.min(1, db.settings.rate);
+    synth.speak(u);
+  }
+  $("dlgReview").addEventListener("click", (e) => {
+    const t = e.target.closest("button"); if (!t) return;
+    const v = rv.queue[rv.i];
+    if (t.matches("[data-show]")) showAnswer();
+    else if (t.matches("[data-grade]")) {
+      const g = +t.dataset.grade;
+      grade(v, g); rv.done++;
+      if (g === 0) rv.queue.push(v);      // see it again in this session
+      rv.i++; showCard(); updateReviewBadge();
+    } else if (t.matches("[data-say-word]")) sayText(v.word);
+    else if (t.matches("[data-say-sent]")) sayText(v.sentence);
+    else if (t.matches("[data-close-review]")) $("dlgReview").close();
+  });
+  $("dlgReview").addEventListener("change", (e) => {
+    if (!e.target.matches("[data-rv-note]")) return;
+    const v = rv.queue[rv.i]; if (v) { v.note = e.target.value.trim(); save(); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!$("dlgReview").open || e.target.closest("input")) return;
+    if (e.key === " " || e.key === "Enter") { const s = $("rvActions").querySelector("[data-show]"); if (s) { e.preventDefault(); s.click(); } }
+    if (/^[1-4]$/.test(e.key)) { const g = $("rvActions").querySelector(`[data-grade="${+e.key - 1}"]`); if (g) g.click(); }
+  });
+  $("rvAuto").checked = db.settings.autoReview;
+  $("rvAuto").onchange = () => { db.settings.autoReview = $("rvAuto").checked; save(); };
+  $("btnReview").onclick = () => { closePanels(); openReview(); };
+  function updateReviewBadge() {
+    const n = dueList().length;
+    $("reviewCount").textContent = n; $("reviewCount").hidden = n === 0;
+    $("btnReviewPanel").textContent = n ? `🧠 Review ${n} ${n === 1 ? "word" : "words"} now` : "🧠 Review (nothing due)";
+  }
+  $("btnReviewPanel").onclick = () => { closePanels(); openReview(); };
+  updateReviewBadge();
+  setInterval(updateReviewBadge, 60000);
+
   // ---------- start ----------
   applySettings();
   updateCount();
@@ -1081,6 +1210,7 @@
     if (m && book.sections[+m[1]] && (!db.last || db.last.s !== +m[1])) renderSection(+m[1]);
     else if (db.last && book.sections[db.last.s]) { renderSection(db.last.s, db.last.p, true); toast("Welcome back – continuing where you stopped"); }
     else renderSection(0);
+    if (storageOk && db.settings.autoReview && dueList().length) setTimeout(openReview, 700);
     if (!storageOk) setTimeout(() => toast("This preview can\u2019t save bookmarks or words. Download the file and open it in your browser to save."), 600);
   }).catch((e) => {
     $("page").innerHTML = `<p class="loading">Could not open the book (${esc(e.message)}). Please reload the page.</p>`;

@@ -215,3 +215,30 @@ body.audio-mode #plVoices { display: none; }
 .who.human { background: #b9770e; color: #fff; }
 .pl.txt#plSrc { font-size: 12px; }
 @media (max-width: 520px) { #plVoices { display: none; } .player { gap: 2px; } }
+
+/* ---- daily review ---- */
+.dlg.review { width: min(560px, 96vw); padding: 0; }
+.rv-top { display: flex; align-items: center; gap: 10px; padding: 12px 8px 8px 20px; border-bottom: 1px solid var(--line); }
+.rv-top h3 { margin: 0; font-weight: 600; font-size: 17px; }
+.rv-head { flex: 1; display: flex; justify-content: flex-end; gap: 14px; font-size: 13px; color: var(--muted); }
+#rvBody { padding: 18px 20px 8px; min-height: 180px; }
+.rv-tag { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.rv-q { font-family: var(--font); font-size: 1.15em; line-height: 1.6; margin: 0; }
+.blank { display: inline-block; border-bottom: 2px solid var(--accent); color: transparent; min-width: 4ch; letter-spacing: 1px; }
+.rv-word { font-size: 26px; font-weight: 700; color: var(--vocab); display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rv-ans blockquote { margin: 0 0 12px; padding: 4px 0 4px 12px; border-left: 3px solid var(--line); font-family: var(--font); font-size: 1.05em; line-height: 1.55; }
+.rv-ans blockquote b { background: #ffe14d; color: #000; font-weight: 600; }
+.rv-note { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.rv-note input { font: inherit; font-size: 15px; color: var(--ink); background: var(--page); border: 1px solid var(--line); border-radius: 4px; padding: 8px; }
+.rv-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 12px 20px; }
+.rv-actions .wide, .rv-actions [data-close-review] { grid-column: 1 / -1; padding: 12px; font-size: 16px; }
+.grade { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; }
+.grade small { font-size: 11px; color: var(--muted); }
+.grade.g0 { border-color: #c0392b; } .grade.g0 b { color: #c0392b; }
+.grade.g1 { border-color: #d68910; } .grade.g1 b { color: #d68910; }
+.grade.g2 { border-color: #2e7d32; } .grade.g2 b { color: #2e7d32; }
+.grade.g3 { border-color: #2b579a; } .grade.g3 b { color: #2b579a; }
+.rv-done { text-align: center; padding: 20px 0; }
+.rv-done .big { font-size: 44px; }
+.rv-auto { padding: 0 20px 14px; font-size: 13px; color: var(--muted); }
+#btnReviewPanel { text-align: center; }

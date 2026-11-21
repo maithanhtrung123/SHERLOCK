@@ -24,6 +24,9 @@
     <button class="tb" id="btnListen" title="Read aloud" aria-label="Read aloud">
       <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><span class="lbl">Listen</span>
     </button>
+    <button class="tb" id="btnReview" title="Review my words" aria-label="Review my words">
+      <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2.4 4.8.6.6.6 1.2.6 2.2h6c0-1 0-1.6.6-2.2C16.8 12.6 18 11.2 18 9a6 6 0 0 0-6-6zM9 19h6M10 22h4"/></svg><span class="lbl">Review</span><span class="badge" id="reviewCount" hidden>0</span>
+    </button>
     <button class="tb" id="btnBookmarks" title="Bookmarks" aria-label="Bookmarks">
       <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span class="lbl">Bookmarks</span>
     </button>
@@ -69,6 +72,7 @@
 <aside id="panelVocab" class="panel wide" hidden aria-label="My vocabulary">
   <div class="phead"><h2>My vocabulary</h2><button class="x" data-close>×</button></div>
   <div class="vtools">
+    <button id="btnReviewPanel" class="btn primary block">🧠 Review</button>
     <button id="btnExport" class="btn primary">⬇ Export for AI (.md)</button>
     <button id="btnCopy" class="btn">Copy for AI</button>
     <label class="chk"><input type="checkbox" id="onlyNew"> Only words not exported yet</label>
@@ -120,6 +124,13 @@
     <p class="hint">Want nicer voices? Microsoft Edge has very natural “Online (Natural)” voices. On iPhone/Mac, download “Enhanced” voices in Settings → Accessibility → Spoken Content → Voices.</p>
     <div class="row"><button type="button" class="btn" id="vReset">Reset</button><button value="ok" class="btn primary">Done</button></div>
   </form>
+</dialog>
+
+<dialog id="dlgReview" class="dlg review">
+  <div class="rv-top"><h3>Daily review</h3><div id="rvHead" class="rv-head"></div><button class="x" data-close-review aria-label="Close">×</button></div>
+  <div id="rvBody"></div>
+  <div id="rvActions" class="rv-actions"></div>
+  <label class="chk rv-auto"><input type="checkbox" id="rvAuto"> Show review when I open the app</label>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
