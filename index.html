@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sherlock Reader</title>
+<meta name="theme-color" content="#2b579a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <button class="tb" id="btnContents" title="Contents" aria-label="Contents">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg><span class="lbl">Contents</span>
+  </button>
+  <div class="doctitle" id="docTitle">Sherlock Reader</div>
+  <div class="tools">
+    <button class="tb" id="btnFontDown" title="Smaller text" aria-label="Smaller text"><span class="aa sm">A</span></button>
+    <button class="tb" id="btnFontUp" title="Bigger text" aria-label="Bigger text"><span class="aa">A</span></button>
+    <button class="tb" id="btnTheme" title="Page colour" aria-label="Page colour">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" class="fill"/></svg>
+    </button>
+    <button class="tb" id="btnBookmarks" title="Bookmarks" aria-label="Bookmarks">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span class="lbl">Bookmarks</span>
+    </button>
+    <button class="tb" id="btnVocab" title="My vocabulary" aria-label="My vocabulary">
+      <svg viewBox="0 0 24 24"><path d="M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-4a2 2 0 0 0-2 2"/><path d="M20 4v14h-6"/></svg><span class="lbl">Vocabulary</span><span class="badge" id="vocabCount">0</span>
+    </button>
+  </div>
+</header>
+
+<main id="desk" class="desk">
+  <article id="page" class="page">
+    <p class="loading">Opening the book…</p>
+  </article>
+  <nav class="pager" id="pager" hidden>
+    <button id="btnPrev" class="pbtn">‹ Previous</button>
+    <button id="btnNext" class="pbtn">Next ›</button>
+  </nav>
+</main>
+
+<footer class="statusbar" id="status"></footer>
+
+<!-- floating toolbar shown on selection / tap -->
+<div id="float" class="float" hidden>
+  <button id="fSave" class="fbtn primary">＋ Save word</button>
+  <button id="fMark" class="fbtn">🔖 Bookmark here</button>
+</div>
+
+<!-- side panels -->
+<div id="scrim" class="scrim" hidden></div>
+<aside id="panelContents" class="panel left" hidden aria-label="Contents">
+  <div class="phead"><h2>Contents</h2><button class="x" data-close>×</button></div>
+  <div id="continueBox"></div>
+  <div id="toc" class="pbody"></div>
+</aside>
+<aside id="panelBookmarks" class="panel" hidden aria-label="Bookmarks">
+  <div class="phead"><h2>Bookmarks</h2><button class="x" data-close>×</button></div>
+  <div class="pbody">
+    <p class="hint">Tap any line in the book, then “Bookmark here”. The app also remembers where you stopped automatically.</p>
+    <div id="bmList"></div>
+  </div>
+</aside>
+<aside id="panelVocab" class="panel wide" hidden aria-label="My vocabulary">
+  <div class="phead"><h2>My vocabulary</h2><button class="x" data-close>×</button></div>
+  <div class="vtools">
+    <button id="btnExport" class="btn primary">⬇ Export for AI (.md)</button>
+    <button id="btnCopy" class="btn">Copy for AI</button>
+    <label class="chk"><input type="checkbox" id="onlyNew"> Only words not exported yet</label>
+    <label class="lang">Also translate into <input id="lang" type="text" placeholder="e.g. Vietnamese"></label>
+    <input id="vSearch" type="search" placeholder="Search my words…">
+  </div>
+  <div id="vList" class="pbody"></div>
+  <div class="vfoot">
+    <button id="btnBackup" class="link">Back up all data</button> ·
+    <label class="link">Restore backup<input type="file" id="fileImport" accept=".json,application/json" hidden></label>
+  </div>
+</aside>
+
+<!-- save word dialog -->
+<dialog id="dlgSave" class="dlg">
+  <form method="dialog" id="formSave">
+    <h3>Save to vocabulary</h3>
+    <label>Word or phrase<input id="sWord" required autocomplete="off"></label>
+    <label>Sentence (context)<textarea id="sSentence" rows="5"></textarea></label>
+    <label class="chk"><input type="checkbox" id="sWhole"> Use the whole paragraph instead</label>
+    <label>My note (optional)<input id="sNote" placeholder="e.g. my guess at the meaning" autocomplete="off"></label>
+    <p class="src" id="sSrc"></p>
+    <div class="row">
+      <button value="cancel" class="btn" formnovalidate>Cancel</button>
+      <button value="ok" class="btn primary" id="sOk">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
