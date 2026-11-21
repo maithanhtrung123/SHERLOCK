@@ -346,3 +346,6 @@ details.others summary { color: var(--accent); cursor: pointer; }
 .tr-sent { padding: 8px 10px; background: var(--accent-soft); border-radius: 6px; }
 .tr-body .def { cursor: default; }
 .tr-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; margin-bottom: 14px; }
+.tr-mean { font-size: 18px; line-height: 1.45; font-family: var(--font); margin: 6px 0 8px; }
+.vi-show { display: inline-block; margin: 6px 0; font-size: 14px; }
+.vi-wrap[hidden] { display: none !important; }

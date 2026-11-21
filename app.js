@@ -413,7 +413,7 @@
         const r = await askAI(`You help an English learner whose first language is ${langName()}. They are reading Sherlock Holmes (Victorian English).
 Selected text: "${me.word}"
 Sentence: "${me.sentence}"
-Reply with JSON only: {"translation": "${langName()} translation of the selected text as used in this sentence", "meaning": "what it means IN THIS SENTENCE, very simple English, max 20 words", "pos": "part of speech (or 'phrase')", "ipa": "IPA pronunciation if it is one word, else empty", "sentence_translation": "natural ${langName()} translation of the whole sentence", "other": "other common meanings, short, or empty", "tip": "one short ${langName()} tip (e.g. old-fashioned word, grammar), or empty"}`, true);
+Reply with JSON only: {"translation": "${langName()} translation of the selected text as used in this sentence", "meaning": "what it means IN THIS SENTENCE, very simple English, max 20 words", "pos": "part of speech (or 'phrase')", "ipa": "IPA pronunciation if it is one word, else empty", "sentence_translation": "natural ${langName()} translation of the whole sentence", "other": "other common meanings, short, or empty", "tip": "one short tip in simple English (e.g. old-fashioned word, common collocation), or empty"}`, true);
         Object.assign(info, { vi: r.translation, meaning: r.meaning, pos: r.pos, ipa: r.ipa, sentenceVi: r.sentence_translation, other: r.other, tip: r.tip, meaningSrc: "ai" });
       } catch (e) { info.err = "AI helper: " + e.message + " – showing the dictionary instead."; }
     }
@@ -430,14 +430,13 @@ Reply with JSON only: {"translation": "${langName()} translation of the selected
     const i = tr.info; let h = "";
     if (i.err) h += `<p class="hint">${esc(i.err)}</p>`;
     h += `<div class="tr-word">${i.pos ? `<span class="pos">${esc(posShort(i.pos))}</span> ` : ""}<b>${esc(i.word)}</b> ${say(i.word)} ${i.ipa ? `<span class="ipa">${esc(i.ipa)}</span>` : ""}</div>`;
-    if (i.vi) h += `<div class="tr-vi">🇻🇳 ${esc(i.vi)}</div>`;
-    if (i.meaning) h += `<div class="rv-mean"><b>In this sentence:</b> ${esc(i.meaning)} <span class="tag">${i.meaningSrc === "ai" ? "AI" : "dictionary"}</span></div>`;
+    if (i.meaning) h += `<div class="tr-mean">${esc(i.meaning)} <span class="tag">${i.meaningSrc === "ai" ? "AI · in this sentence" : "dictionary"}</span></div>`;
     else if (!i.vi) h += `<p class="hint">No meaning found. ${aiReady() ? "" : `<button class="link" data-ai-setup>✨ Set up AI helper</button> for meanings in context.`}</p>`;
     if (i.meaningSrc === "dict" && i.defs && i.defs.length > 1)
       h += `<details class="others"><summary>Other dictionary meanings</summary>` + i.defs.slice(1).map((d) => `<div class="def"><i>${esc(posShort(d.pos))}</i> ${esc(d.def)}</div>`).join("") + `</details>`;
     if (i.other) h += `<div class="tr-other"><b>Other meanings:</b> ${esc(i.other)}</div>`;
     if (i.tip) h += `<div class="tr-other">💡 ${esc(i.tip)}</div>`;
-    if (i.sentenceVi) h += `<div class="tr-sent"><b>Whole sentence:</b> ${esc(i.sentenceVi)}</div>`;
+    h += viBlock((i.vi ? `<div class="tr-vi">🇻🇳 ${esc(i.vi)}</div>` : "") + (i.sentenceVi ? `<div class="tr-sent"><b>Whole sentence:</b> ${esc(i.sentenceVi)}</div>` : ""));
     if (!aiReady() && i.meaning) h += `<p class="hint">Dictionary meanings may not fit this sentence. <button class="link" data-ai-setup>✨ Set up AI helper</button> for a meaning in context.</p>`;
     $("trBody").innerHTML = h;
   }
@@ -485,7 +484,7 @@ Paragraph: "${ask.paragraph.slice(0, 1500)}"
 
 My question: ${q}
 
-Answer clearly and briefly for a learner (under 150 words unless I ask for more). Use simple English; add ${langName()} where it helps.`;
+Answer clearly and briefly for a learner (under 150 words unless I ask for more). Answer in simple English${showVi() ? `; add a short ${langName()} translation at the end` : " (only use another language if I ask in it)"}.`;
     }
     const shown = ask.msgs.length ? q : q.split("My question: ")[1].split("\n\nAnswer clearly")[0];
     ask.msgs.push({ role: "user", content: q });
@@ -565,6 +564,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
   }
   function buildVocab() {
     $("lang").value = db.settings.lang || "";
+    $("optVi").checked = showVi();
     $("onlyNew").checked = !!db.settings.onlyNew;
     const q = $("vSearch").value.trim().toLowerCase();
     const items = db.vocab.filter((v) => !q || (v.word + " " + v.sentence + " " + v.note).toLowerCase().includes(q));
@@ -583,6 +583,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
   }
   $("vSearch").oninput = buildVocab;
   $("lang").onchange = () => { db.settings.lang = $("lang").value.trim(); save(); };
+  $("optVi").onchange = () => { db.settings.showVi = $("optVi").checked; save(); };
   $("onlyNew").onchange = () => { db.settings.onlyNew = $("onlyNew").checked; save(); };
   $("vList").addEventListener("click", (e) => {
     const item = e.target.closest(".v-item");
@@ -1416,11 +1417,23 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     return JSON.parse(m[0]);
   }
   const langName = () => db.settings.lang || "Vietnamese";
+  // English first; the translation is optional (hidden behind a button unless "always show" is on)
+  const showVi = () => !!db.settings.showVi;
+  function viBlock(html) {
+    if (!html) return "";
+    return (showVi() ? "" : `<button type="button" class="link vi-show" data-show-vi>🌐 Show ${esc(langName())}</button>`) +
+      `<div class="vi-wrap"${showVi() ? "" : " hidden"}>${html}</div>`;
+  }
+  const viLine = (t, cls) => t ? viBlock(`<div class="${cls || "rv-vi"}">🇻🇳 ${esc(t)}</div>`) : "";
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-show-vi]");
+    if (b) { b.nextElementSibling.hidden = false; b.remove(); }
+  });
   async function aiMeaning(v) {
     return askAI(`You help an English learner whose first language is ${langName()}. They are reading Sherlock Holmes (Victorian English).
 Word or phrase: "${v.word}"
 Sentence: "${v.sentence}"
-Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple English, max 15 words", "pos": "part of speech", "translation": "${langName()} translation of the word as used here", "example": "one short modern example sentence using it", "tip": "one short tip, e.g. whether it is old-fashioned, in ${langName()}"}`, true);
+Reply with JSON only: {"meaning": "what it means IN THIS SENTENCE, very simple English, max 15 words", "pos": "part of speech", "translation": "${langName()} translation of the word as used here", "example": "one short modern example sentence using it", "tip": "one short tip in simple English, e.g. whether it is old-fashioned or formal"}`, true);
   }
   // Fill in a meaning automatically (AI if set up, otherwise free dictionary + translation).
   const POS_SHORT = { adjective: "adj", noun: "noun", verb: "verb", adverb: "adv", preposition: "prep", conjunction: "conj", pronoun: "pron", interjection: "interj", phrase: "phrase", idiom: "idiom", "phrasal verb": "phrasal verb", determiner: "det" };
@@ -1468,8 +1481,8 @@ For an English learner (first language ${langName()}). Use short bullet points:
 - part of speech here and its job in the sentence (what it describes/modifies)
 - its other word forms (e.g. noun/verb/adj/adv forms, plural or past tense)
 - one common pattern or collocation with it
-- a ${langName()} note in one line
-Keep it under 90 words.`);
+${showVi() ? `- a ${langName()} note in one line
+` : ""}Keep it under 90 words.`);
     v.grammar = g; save();
     return g;
   }
@@ -1522,7 +1535,7 @@ Keep it under 90 words.`);
         h += `<details class="others"><summary>Not the right meaning? Choose another</summary>` + v.defs.map((d, i) => `<button class="def" data-def="${i}"><i>${esc(posShort(d.pos))}</i> ${esc(d.def)}</button>`).join("") + `</details>`;
     } else if (v._busy) h += `<div class="rv-mean hint">${aiReady() ? "✨ AI is writing the meaning…" : "Looking up the meaning…"}</div>`;
     else h += `<div class="rv-mean hint">No meaning found. ${aiReady() ? "" : "Write it in your note, or turn on ✨ AI helper."}</div>`;
-    if (v.vi) h += `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>`;
+    h += viLine(v.vi);
     if (v.example) h += `<div class="rv-ex">e.g. <i>${esc(v.example)}</i></div>`;
     if (v.tip) h += `<div class="rv-ex">💡 ${esc(v.tip)}</div>`;
     h += `<label class="rv-note">My note / meaning in my words<input data-rv-note value="${esc(v.note || "")}" placeholder="Optional"></label>`;
@@ -1575,7 +1588,7 @@ Keep it under 90 words.`);
     } else {
       c.answer = v.word;
       body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 Type the word</div>
-        <div class="rv-mean big">${esc(m)}</div>${v.vi ? `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>` : ""}
+        <div class="rv-mean big">${esc(m)}</div>${viLine(v.vi)}
         <p class="hint">Starts with “${esc(v.word.charAt(0))}” · ${v.word.length} letters</p>
         <form id="typeForm" class="typeform"><input id="typeIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type the word…"><button class="btn primary">Check</button></form>
         <div id="typeRes"></div></div>`;
@@ -1607,7 +1620,7 @@ Keep it under 90 words.`);
     fb.className = "fb " + (ok ? "ok" : "no");
     fb.innerHTML = (ok ? `✅ Correct! You will see it ${ivlText(s.ivl)}.` : `❌ Not quite. The answer is <b>${esc(v.word)}</b>${c.kind === "type" && given.trim() ? ` (you wrote “${esc(given)}”)` : ""}.`) +
       `<blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>` +
-      (meaningOf(v) ? `<div class="rv-mean"><b>Meaning:</b> ${esc(meaningOf(v))}</div>` : "") + (v.vi ? `<div class="rv-vi">🇻🇳 ${esc(v.vi)}</div>` : "") +
+      (meaningOf(v) ? `<div class="rv-mean"><b>Meaning:</b> ${esc(meaningOf(v))}</div>` : "") + viLine(v.vi) +
       (!ok && aiReady() ? `<button class="btn small" data-ai-feedback="${esc(given)}">✨ Ask AI why</button><div class="ai-out" id="aiOut"></div>` : "");
     $("rvBody").querySelector(".rv-card").appendChild(fb);
     $("rvActions").innerHTML = `<button class="btn primary wide" data-next>Next →</button>`;
@@ -1656,10 +1669,10 @@ Keep it under 90 words.`);
     else if (t.matches("[data-ai-explain]")) {
       t.disabled = true;
       enrich(v, true).then(() => showCard());
-      aiInto(askAI(`Explain to an English learner (first language ${langName()}) the word "${v.word}" as used in this sentence from Sherlock Holmes: "${v.sentence}". Give: the meaning here, the whole sentence in simple modern English, and a ${langName()} translation of the sentence. Keep it short.`));
+      aiInto(askAI(`Explain to an English learner (first language ${langName()}) the word "${v.word}" as used in this sentence from Sherlock Holmes: "${v.sentence}". Give: the meaning here and the whole sentence in simple modern English${showVi() ? `, then a ${langName()} translation of the sentence` : ""}. Keep it short.`));
     } else if (t.dataset.aiFeedback !== undefined) {
       t.disabled = true;
-      aiInto(askAI(`An English learner (first language ${langName()}) was practising the word "${v.word}" (meaning: ${meaningOf(v) || "see sentence"}). Sentence: "${v.sentence}". They answered "${t.dataset.aiFeedback}". In 3 short sentences, kindly explain the difference and give a memory trick. Write in simple English, then repeat the key point in ${langName()}.`));
+      aiInto(askAI(`An English learner (first language ${langName()}) was practising the word "${v.word}" (meaning: ${meaningOf(v) || "see sentence"}). Sentence: "${v.sentence}". They answered "${t.dataset.aiFeedback}". In 3 short sentences, kindly explain the difference and give a memory trick. Write in simple English${showVi() ? `, then repeat the key point in ${langName()}` : ""}.`));
     } else if (t.matches("[data-ai-setup]")) { openAISetup(); }
   });
   $("dlgReview").addEventListener("change", (e) => {
