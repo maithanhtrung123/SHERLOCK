@@ -181,7 +181,8 @@
       const p = visiblePara();
       if (!p || cur < 0) return;
       const pid = +p.dataset.p;
-      db.last = { s: cur, p: pid };
+      db.last = { s: cur, p: pid }; db.lastAt = Date.now();
+      db.readLog = db.readLog || {}; db.readLog[today()] = (db.readLog[today()] || 0) + 1;
       // reaching the bottom of the page counts as finished
       const ps = $("page").querySelectorAll("p[data-p]");
       const lastPid = +ps[ps.length - 1].dataset.p;
@@ -260,7 +261,7 @@
   });
 
   // ---------- panels ----------
-  const panels = ["panelContents", "panelBookmarks", "panelVocab"];
+  const panels = ["panelContents", "panelBookmarks", "panelVocab", "panelProgress"];
   function openPanel(id) {
     panels.forEach((p) => ($(p).hidden = p !== id));
     $("scrim").hidden = false;
@@ -268,6 +269,7 @@
     if (id === "panelContents") buildToc();
     if (id === "panelBookmarks") buildBookmarks();
     if (id === "panelVocab") buildVocab();
+    if (id === "panelProgress") buildProgress();
   }
   function closePanels() { panels.forEach((p) => ($(p).hidden = true)); $("scrim").hidden = true; }
   $("scrim").onclick = closePanels;
@@ -526,25 +528,120 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }
-  $("btnBackup").onclick = () => download(`sherlock-reader-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 1), "application/json");
+  // ---------- my progress: stats, export, import ----------
+  const stamp = () => new Date().toISOString().slice(0, 10);
+  function bookStats() {
+    const groups = [];
+    book.sections.forEach((s) => {
+      if (s.path[0] === "About this book") return;
+      let g = groups[groups.length - 1];
+      if (!g || g.name !== s.path[0]) groups.push((g = { name: s.path[0], secs: [], words: 0, read: 0, done: 0 }));
+      const pr = sectionProgress(s.id);
+      g.secs.push(s); g.words += s.words; g.read += s.words * pr; if (pr >= 0.97) g.done++;
+    });
+    return groups;
+  }
+  function vocabStats() {
+    const st = { total: db.vocab.length, fresh: 0, learning: 0, mastered: 0, due: 0, hard: [] };
+    db.vocab.forEach((v) => {
+      const s = srsOf(v);
+      if (s.due <= Date.now()) st.due++;
+      if (s.reps === 0 && !s.lapses) st.fresh++; else if (s.ivl >= 21) st.mastered++; else st.learning++;
+    });
+    st.hard = db.vocab.filter((v) => (v.srs && v.srs.lapses) > 0).sort((a, b) => b.srs.lapses - a.srs.lapses).slice(0, 10);
+    return st;
+  }
+  function studyDays() { return new Set([...Object.keys(db.reviewLog || {}), ...Object.keys(db.readLog || {})]).size; }
+  function buildProgress() {
+    const groups = bookStats(), vs = vocabStats();
+    const words = groups.reduce((a, g) => a + g.words, 0), read = groups.reduce((a, g) => a + g.read, 0);
+    const chapters = groups.reduce((a, g) => a + g.secs.length, 0), done = groups.reduce((a, g) => a + g.done, 0);
+    const reviews = Object.values(db.reviewLog || {}).reduce((a, b) => a + b, 0);
+    const pct = (x) => Math.round(x * 100);
+    let html = `<div class="stats">
+      <div class="stat"><b>${pct(read / words)}%</b><span>of the whole book</span></div>
+      <div class="stat"><b>${Math.round(read).toLocaleString()}</b><span>words read</span></div>
+      <div class="stat"><b>${done}/${chapters}</b><span>chapters finished</span></div>
+      <div class="stat"><b>🔥 ${streak()}</b><span>day streak · ${studyDays()} days studied</span></div>
+      <div class="stat"><b>${vs.total}</b><span>saved words</span></div>
+      <div class="stat"><b>${vs.mastered}</b><span>words remembered well (21+ days)</span></div>
+    </div>`;
+    html += `<p class="hint">Words: ${vs.fresh} new · ${vs.learning} learning · ${vs.mastered} remembered · ${vs.due} due now · ${reviews} reviews done</p>`;
+    if (db.last && book.sections[db.last.s]) html += `<button class="btn primary block" data-go-last>▶ Continue: ${esc(pathText(book.sections[db.last.s]))}</button>`;
+    html += `<h3 class="ph">Books</h3>`;
+    groups.forEach((g) => {
+      const next = g.secs.find((s) => s.words > 60 && sectionProgress(s.id) < 0.97);
+      html += `<div class="bookrow"><div class="bt"><span>${esc(g.name)}</span><span class="d">${g.done}/${g.secs.length} chapters</span></div>
+        <div class="bar"><i style="width:${pct(g.read / Math.max(1, g.words))}%"></i></div>
+        ${next && g.read > 0 ? `<button class="link" data-go-sec="${next.id}">Next: ${esc(next.title)}</button>` : ""}</div>`;
+    });
+    if (vs.hard.length) html += `<h3 class="ph">Words you forget most</h3><p>${vs.hard.map((v) => `<span class="chip">${esc(v.word)}</span>`).join(" ")}</p>`;
+    $("progBody").innerHTML = html;
+  }
+  $("progBody").addEventListener("click", (e) => {
+    if (e.target.matches("[data-go-last]")) { closePanels(); renderSection(db.last.s, db.last.p, true); }
+    if (e.target.dataset.goSec) { closePanels(); renderSection(+e.target.dataset.goSec); }
+  });
+  document.querySelectorAll("[data-open-progress]").forEach((b) => (b.onclick = () => openPanel("panelProgress")));
+  $("btnProgress").onclick = () => openPanel("panelProgress");
+
+  $("btnExportAll").onclick = () => {
+    const out = Object.assign({ app: "Sherlock Reader", kind: "learning-progress", version: 1, exportedAt: new Date().toISOString() }, db);
+    download(`sherlock-learning-${stamp()}.json`, JSON.stringify(out, null, 1), "application/json");
+    toast("Saved – keep this file to continue later or on another device");
+  };
+  $("btnReport").onclick = () => {
+    const groups = bookStats(), vs = vocabStats();
+    const words = groups.reduce((a, g) => a + g.words, 0), read = groups.reduce((a, g) => a + g.read, 0);
+    let md = `# My English learning with Sherlock Holmes – ${stamp()}\n\n`;
+    md += `- Read: **${Math.round((read / words) * 100)}%** of the complete book (${Math.round(read).toLocaleString()} words)\n`;
+    md += `- Study streak: **${streak()} days** (${studyDays()} days studied in total)\n`;
+    md += `- Vocabulary: ${vs.total} saved · ${vs.mastered} remembered well · ${vs.learning} learning · ${vs.fresh} new\n`;
+    if (db.last && book.sections[db.last.s]) md += `- Currently reading: ${pathText(book.sections[db.last.s])}\n`;
+    md += `\n## Books\n\n| Book | Progress | Chapters finished |\n| --- | --- | --- |\n`;
+    groups.forEach((g) => (md += `| ${g.name} | ${Math.round((g.read / Math.max(1, g.words)) * 100)}% | ${g.done}/${g.secs.length} |\n`));
+    if (vs.hard.length) md += `\n## Words I forget most\n\n` + vs.hard.map((v) => `- **${v.word}** (forgot ${v.srs.lapses}×) – “${v.sentence}”${v.note ? ` – my note: ${v.note}` : ""}`).join("\n") + "\n";
+    const recent = db.vocab.slice(0, 20);
+    if (recent.length) md += `\n## Latest words\n\n` + recent.map((v) => `- **${v.word}**${v.note ? `: ${v.note}` : ""}`).join("\n") + "\n";
+    md += `\n---\n_You can give this report to an AI and ask: “Based on my progress, what should I focus on next? Make me a short study plan and a quiz on the words I forget most.”_\n`;
+    download(`sherlock-progress-report-${stamp()}.md`, md, "text/markdown");
+  };
+
+  // Import merges: nothing already here is deleted.
+  function mergeData(data) {
+    const byId = new Map(db.vocab.map((v) => [v.id, v]));
+    let added = 0;
+    data.vocab.forEach((v) => {
+      const mine = byId.get(v.id);
+      if (!mine) { db.vocab.push(v); added++; return; }
+      if (!mine.note && v.note) mine.note = v.note;
+      const a = mine.srs, b = v.srs;          // keep the review schedule that is further along
+      if (b && (!a || (b.reps + b.lapses) > (a.reps + a.lapses) || ((b.reps + b.lapses) === (a.reps + a.lapses) && b.due > a.due))) mine.srs = b;
+      if (v.exported) mine.exported = true;
+    });
+    db.vocab.sort((a, b) => b.at - a.at);
+    const hb = new Set(db.bookmarks.map((b) => b.id));
+    (data.bookmarks || []).forEach((b) => { if (!hb.has(b.id)) db.bookmarks.push(b); });
+    Object.entries(data.furthest || {}).forEach(([k, v]) => { if (!db.furthest[k] || db.furthest[k] < v) db.furthest[k] = v; });
+    if (data.last && (!db.last || (data.lastAt || 0) > (db.lastAt || 0))) { db.last = data.last; db.lastAt = data.lastAt || Date.now(); }
+    ["reviewLog", "readLog"].forEach((k) => {
+      db[k] = db[k] || {};
+      Object.entries(data[k] || {}).forEach(([d, n]) => { db[k][d] = Math.max(db[k][d] || 0, n); });
+    });
+    return added;
+  }
   $("fileImport").onchange = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
     try {
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.vocab)) throw new Error("not a backup");
-      // merge: keep everything, skip items already present
-      const have = new Set(db.vocab.map((v) => v.id));
-      data.vocab.forEach((v) => { if (!have.has(v.id)) db.vocab.push(v); });
-      db.vocab.sort((a, b) => b.at - a.at);
-      const hb = new Set(db.bookmarks.map((b) => b.id));
-      (data.bookmarks || []).forEach((b) => { if (!hb.has(b.id)) db.bookmarks.push(b); });
-      Object.entries(data.furthest || {}).forEach(([k, v]) => { if (!db.furthest[k] || db.furthest[k] < v) db.furthest[k] = v; });
-      if (data.last && !db.last) db.last = data.last;
-      Object.entries(data.reviewLog || {}).forEach(([k, n]) => { db.reviewLog[k] = Math.max(db.reviewLog[k] || 0, n); });
-      save(); updateCount(); buildVocab(); renderSection(cur);
-      toast("Backup restored");
-    } catch (err) { toast("That file is not a Sherlock Reader backup"); }
+      const added = mergeData(data);
+      save(); updateCount();
+      if (!$("panelProgress").hidden) buildProgress();
+      if (db.last && book.sections[db.last.s]) renderSection(db.last.s, db.last.p, true); else renderSection(cur);
+      toast(`Imported – ${added} new ${added === 1 ? "word" : "words"} added. Continuing where you stopped.`);
+    } catch (err) { toast("That file is not a Sherlock Reader progress file"); }
     e.target.value = "";
   };
 
@@ -563,6 +660,8 @@
     applySettings(); save();
     if (pid) renderSection(cur, pid);
   }
+  $("btnDisplay").onclick = (e) => { e.stopPropagation(); $("displayPop").hidden = !$("displayPop").hidden; };
+  document.addEventListener("click", (e) => { if (!e.target.closest("#displayPop,#btnDisplay")) $("displayPop").hidden = true; });
   $("btnFontUp").onclick = () => changeFont(1);
   $("btnFontDown").onclick = () => changeFont(-1);
   $("btnTheme").onclick = () => {
@@ -1080,10 +1179,10 @@
   function streak() {
     let n = 0;
     const d = new Date();
-    if (!db.reviewLog[today()]) d.setDate(d.getDate() - 1);   // today not done yet: count up to yesterday
+    if (!db.reviewLog[today()] && !(db.readLog || {})[today()]) d.setDate(d.getDate() - 1);   // today not done yet: count up to yesterday
     for (;;) {
       const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (!db.reviewLog[k]) return n;
+      if (!db.reviewLog[k] && !(db.readLog || {})[k]) return n;
       n++; d.setDate(d.getDate() - 1);
     }
   }

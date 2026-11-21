@@ -9,7 +9,8 @@ A simple, Word-style web app for reading **The Complete Sherlock Holmes** and le
 - **Listen with human voices**: tap *Listen* (or tap a line → *Read from here*) to play the LibriVox audiobook for that chapter, streamed from archive.org. Most books are *dramatic readings* with a different actor for each character. The current word is highlighted in yellow where exact timings exist (`book/align/`), otherwise the current paragraph is highlighted.
 - **Computer voices**: switch with *🤖 Computer* in the player. The narrator, Holmes, Watson, women and other characters each get their own browser voice, with the spoken word highlighted in yellow. Change voices and speed in *Voices*.
 - **Daily review (spaced repetition)**: saved words come back on a schedule, like Anki. When you open the app and words are due, a review card shows the original sentence with the word hidden; tap *Show the word*, then choose Again / Hard / Good / Easy. Keeps a 🔥 daily streak. Turn off auto-open with the checkbox in the review window.
-- **Your data stays on your device** (browser storage). Use *Back up all data* / *Restore backup* in the Vocabulary panel to move it between phone and computer.
+- **My progress**: % of the book read, chapters finished per book, streak, words remembered. *Export my learning* saves everything (position, finished chapters, bookmarks, words + review schedule, streak) in one .json file; *Import to continue* merges it back on any device without deleting anything. *Progress report* makes a readable .md summary you can give to an AI.
+- **Your data stays on your device** (browser storage) until you export it.
 
 Works offline after the first visit, and can be added to the phone home screen ("Add to Home Screen").
 

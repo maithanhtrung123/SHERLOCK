@@ -16,16 +16,20 @@
   </button>
   <div class="doctitle" id="docTitle">Sherlock Reader</div>
   <div class="tools">
-    <button class="tb" id="btnFontDown" title="Smaller text" aria-label="Smaller text"><span class="aa sm">A</span></button>
-    <button class="tb" id="btnFontUp" title="Bigger text" aria-label="Bigger text"><span class="aa">A</span></button>
-    <button class="tb" id="btnTheme" title="Page colour" aria-label="Page colour">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" class="fill"/></svg>
-    </button>
+    <button class="tb" id="btnDisplay" title="Text size and page colour" aria-label="Text size and page colour"><span class="aa">Aa</span></button>
+    <div id="displayPop" class="pop" hidden>
+      <button class="fbtn" id="btnFontDown" title="Smaller text"><span class="aa sm">A</span> Smaller</button>
+      <button class="fbtn" id="btnFontUp" title="Bigger text"><span class="aa">A</span> Bigger</button>
+      <button class="fbtn" id="btnTheme" title="Page colour">◐ Page colour</button>
+    </div>
     <button class="tb" id="btnListen" title="Read aloud" aria-label="Read aloud">
       <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><span class="lbl">Listen</span>
     </button>
     <button class="tb" id="btnReview" title="Review my words" aria-label="Review my words">
       <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2.4 4.8.6.6.6 1.2.6 2.2h6c0-1 0-1.6.6-2.2C16.8 12.6 18 11.2 18 9a6 6 0 0 0-6-6zM9 19h6M10 22h4"/></svg><span class="lbl">Review</span><span class="badge" id="reviewCount" hidden>0</span>
+    </button>
+    <button class="tb" id="btnProgress" title="My progress" aria-label="My progress">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span class="lbl">Progress</span>
     </button>
     <button class="tb" id="btnBookmarks" title="Bookmarks" aria-label="Bookmarks">
       <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span class="lbl">Bookmarks</span>
@@ -81,8 +85,18 @@
   </div>
   <div id="vList" class="pbody"></div>
   <div class="vfoot">
-    <button id="btnBackup" class="link">Back up all data</button> ·
-    <label class="link">Restore backup<input type="file" id="fileImport" accept=".json,application/json" hidden></label>
+    Save or move your learning: <button class="link" data-open-progress>My progress → Export / Import</button>
+  </div>
+</aside>
+
+<aside id="panelProgress" class="panel wide" hidden aria-label="My progress">
+  <div class="phead"><h2>My progress</h2><button class="x" data-close>×</button></div>
+  <div id="progBody" class="pbody"></div>
+  <div class="vfoot prog-foot">
+    <button id="btnExportAll" class="btn primary">⬇ Export my learning (.json)</button>
+    <label class="btn">⬆ Import to continue<input type="file" id="fileImport" accept=".json,application/json" hidden></label>
+    <button id="btnReport" class="btn">📝 Progress report (.md)</button>
+    <p class="hint">The .json file keeps everything: where you stopped, finished chapters, bookmarks, saved words with their review schedule, streak. Import it on another phone/computer (or later) to continue. Importing <b>adds</b> to what is already here; nothing is deleted.</p>
   </div>
 </aside>
 
