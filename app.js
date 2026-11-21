@@ -679,7 +679,7 @@
     } else if (text.trim()) tts.recent = tts.recent.slice(-2);
     const chunks = [];
     parts.forEach((pt) => chunkRanges(text, pt.a, pt.b).forEach(([a, b]) =>
-      chunks.push({ a, b, text: text.slice(a, b).replace(/[“”]/g, "").replace(/\s+/g, " ").trim(), who: pt.speech ? who : null })));
+      chunks.push({ a, b, text: text.slice(a, b).replace(/[“”\n]/g, " "), who: pt.speech ? who : null })));
     return chunks;
   }
 
@@ -722,6 +722,14 @@
   // ----- playback -----
   const hl = window.CSS && CSS.highlights && window.Highlight ? new Highlight() : null;
   if (hl) CSS.highlights.set("tts", hl);
+  const hlWord = hl ? new Highlight() : null;
+  if (hlWord) CSS.highlights.set("word", hlWord);
+  function markWord(p, a, b) {
+    if (!hlWord) return;
+    hlWord.clear();
+    const x = posAt(p, a), y = posAt(p, b);
+    if (x && y) { const r = new Range(); r.setStart(x[0], x[1]); r.setEnd(y[0], y[1]); hlWord.add(r); }
+  }
   function paraEls() { return $("page").querySelectorAll("p[data-p]"); }
   function showChunk(p, ch) {
     document.querySelectorAll("p.reading").forEach((x) => x !== p && x.classList.remove("reading"));
@@ -738,7 +746,7 @@
     $("plWho").textContent = ch.who ? (ch.who.label || (ch.who.female ? "A woman" : "Someone")) : "Narrator";
     $("plWho").className = "who " + (ch.who ? (ch.who.key === "holmes" || ch.who.key === "watson" ? ch.who.key : "other") : "narr");
   }
-  function clearShow() { if (hl) hl.clear(); document.querySelectorAll("p.reading").forEach((x) => x.classList.remove("reading")); }
+  function clearShow() { if (hl) hl.clear(); if (hlWord) hlWord.clear(); document.querySelectorAll("p.reading").forEach((x) => x.classList.remove("reading")); }
 
   function speakNext() {
     if (!tts.on || tts.paused) return;
@@ -757,11 +765,18 @@
     }
     const p = ps[tts.pi], ch = tts.chunks[tts.ci];
     showChunk(p, ch);
+    if (hlWord) hlWord.clear();
     db.last = { s: tts.s, p: +p.dataset.p }; save();
     const { v, pitch } = voiceFor(ch.who);
     const u = new SpeechSynthesisUtterance(ch.text);
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "en-GB";
     u.pitch = pitch; u.rate = db.settings.rate;
+    u.onboundary = (e) => {   // yellow highlight on the word being spoken
+      if (e.name && e.name !== "word") return;
+      const a = ch.a + e.charIndex;
+      const m = textOf(p).slice(a).match(/^[\w'’-]+/);
+      markWord(p, a, a + (e.charLength || (m ? m[0].length : 1)));
+    };
     const g = ++tts.gen;
     u.onend = () => { if (g !== tts.gen) return; tts.ci++; speakNext(); };
     u.onerror = (e) => { if (g !== tts.gen) return; if (e.error === "interrupted" || e.error === "canceled") return; tts.ci++; setTimeout(speakNext, 50); };
@@ -840,19 +855,219 @@
   if (synth) {
     loadVoices();
     if ("onvoiceschanged" in synth) synth.addEventListener("voiceschanged", loadVoices);
-    $("btnListen").onclick = () => (tts.on ? stopReading() : startReading());
-    $("fRead").onclick = () => { const p = pending && pending.p; hideFloat(); window.getSelection().removeAllRanges(); startReading(p); };
-    $("plPlay").onclick = togglePause;
-    $("plStop").onclick = stopReading;
-    $("plPrev").onclick = () => skip(-1);
-    $("plNext").onclick = () => skip(1);
-    $("plRate").value = String(db.settings.rate);
     $("plRate").onchange = () => { db.settings.rate = +$("plRate").value; save(); if (tts.on && !tts.paused) { tts.gen++; synth.cancel(); speakNext(); } };
     $("plVoices").onclick = () => { buildVoicesDlg(); $("dlgVoices").showModal ? $("dlgVoices").showModal() : $("dlgVoices").setAttribute("open", ""); };
     window.addEventListener("pagehide", () => synth.cancel());
-  } else {
-    $("btnListen").hidden = true; $("fRead").hidden = true;
   }
+
+  // ---------- human audiobook (LibriVox recordings, streamed from archive.org) ----------
+  const aud = { on: false, unit: null, ti: 0, align: null, words: null, el: new Audio(), raf: 0, lastPid: null };
+  aud.el.preload = "auto";
+  window.sherlockAudio = aud.el;   // handy for debugging in the console
+  let audioMap = null;
+  const alignCache = {};
+  async function loadAudioMap() {
+    if (audioMap) return audioMap;
+    const el = document.getElementById("audio-data");
+    try { audioMap = el ? JSON.parse(el.textContent) : await (await fetch("book/audio.json")).json(); }
+    catch (e) { audioMap = { recordings: {}, sections: {} }; }
+    return audioMap;
+  }
+  async function loadAlign(key) {
+    if (key in alignCache) return alignCache[key];
+    const el = document.getElementById("align-data");
+    let data = null;
+    if (el) data = JSON.parse(el.textContent)[key] || null;
+    else { try { const r = await fetch(`book/align/${key}.json`); if (r.ok) data = await r.json(); } catch (e) {} }
+    return (alignCache[key] = data);
+  }
+  // The recording that covers a section: its tracks and every section it spans
+  // (some stories are split into chapters but recorded as one file).
+  function unitFor(id) {
+    if (!audioMap || !book.sections[id]) return null;
+    const S = book.sections, sameStory = (a, b) => S[a].path.length === 3 && S[b].path.length === 3 && S[a].path[0] === S[b].path[0] && S[a].path[1] === S[b].path[1];
+    let first = id;
+    while (!audioMap.sections[first] && first > 0 && sameStory(first - 1, id)) first--;
+    if (!audioMap.sections[first]) return null;
+    const secs = [first];
+    for (let k = first + 1; k < S.length && !audioMap.sections[k] && sameStory(k, first); k++) secs.push(k);
+    if (!secs.includes(id)) return null;
+    return { key: first, tracks: audioMap.sections[first], secs, rec: audioMap.recordings[S[first].path[0]] };
+  }
+  // Without exact timings, estimate: words are spread evenly over each file,
+  // skipping the LibriVox announcement at the start and end.
+  const INTRO = 20, OUTRO = 12;
+  function unitWords(u) {
+    if (u.wc) return u.wc;
+    const list = []; let total = 0;
+    u.secs.forEach((sid) => book.sections[sid].paras.forEach(([pid, h]) => {
+      const n = h.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+      list.push({ sid, pid, start: total, n }); total += n;
+    }));
+    return (u.wc = { list, total: Math.max(1, total) });
+  }
+  function speechLen(t) { return t > 120 ? t - INTRO - OUTRO : t; }
+  function estTime(u, frac) {
+    const spans = u.tracks.map((tr) => speechLen(tr.t || 1));
+    let target = frac * spans.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < spans.length; i++) {
+      if (target <= spans[i] || i === spans.length - 1) return { ti: i, t: Math.min(target, spans[i]) + (u.tracks[i].t > 120 ? INTRO : 0) };
+      target -= spans[i];
+    }
+  }
+  function estFrac(u, ti, t) {
+    const spans = u.tracks.map((tr) => speechLen(tr.t || 1));
+    let before = 0;
+    for (let i = 0; i < ti; i++) before += spans[i];
+    const inTrack = Math.max(0, Math.min(spans[ti], t - (u.tracks[ti].t > 120 ? INTRO : 0)));
+    return (before + inTrack) / spans.reduce((a, b) => a + b, 0);
+  }
+
+  function playTrack(ti, at) {
+    aud.ti = ti;
+    const tr = aud.unit.tracks[ti];
+    if (aud.el.dataset.src !== tr.url) { aud.el.src = tr.url; aud.el.dataset.src = tr.url; }
+    aud.el.playbackRate = db.settings.rate;
+    const go = () => {
+      try { aud.el.currentTime = at || 0; } catch (e) {}
+      aud.el.play().catch((e) => { if (e.name === "NotAllowedError") { setPaused(true); toast("Tap ▶ to start the audio"); } });
+    };
+    if (aud.el.readyState >= 1) go(); else aud.el.addEventListener("loadedmetadata", go, { once: true });
+  }
+  async function startAudio(fromP) {
+    await loadAudioMap();
+    const u = unitFor(cur);
+    if (!u) return false;
+    stopAll();
+    aud.unit = u; aud.on = true; aud.lastPid = null;
+    aud.align = await loadAlign(u.key);
+    const p = fromP || visiblePara();
+    const pid = p ? +p.dataset.p : null;
+    let ti = 0, t = 0;
+    if (pid && aud.align) {
+      const w = aud.align.w.find((x) => x[2] >= pid);
+      if (w) { ti = w[0]; t = Math.max(0, w[1] - 0.3); }
+    } else if (pid) {
+      const wc = unitWords(u), e = wc.list.find((x) => x.pid === pid);
+      if (e && e.start > 0) ({ ti, t } = estTime(u, e.start / wc.total));
+    }
+    $("player").hidden = false; document.body.classList.add("playing"); document.body.classList.add("audio-mode");
+    $("plWho").textContent = "🎧 " + (u.rec && u.rec.dramatic ? "Full cast" : "Human reader");
+    $("plWho").className = "who human";
+    $("plWho").title = (u.rec ? u.rec.title + " – LibriVox (public domain). " : "") + (aud.align ? "Words follow the audio exactly." : "The highlight follows the paragraph (approximate).");
+    setPaused(false);
+    srcLabel();
+    playTrack(ti, t);
+    tick();
+    return true;
+  }
+  function stopAudio() {
+    if (!aud.on) return;
+    aud.on = false; aud.el.pause(); cancelAnimationFrame(aud.raf);
+    document.body.classList.remove("audio-mode");
+  }
+  function setPaused(paused) {
+    $("plPlay").textContent = paused ? "▶" : "❚❚"; $("plPlay").title = paused ? "Play" : "Pause";
+  }
+  aud.el.addEventListener("play", () => setPaused(false));
+  aud.el.addEventListener("pause", () => setPaused(true));
+  aud.el.addEventListener("ended", () => {
+    if (!aud.on) return;
+    if (aud.ti < aud.unit.tracks.length - 1) return playTrack(aud.ti + 1, 0);
+    // finished this recording: go on to the next part that has one
+    let next = aud.unit.secs[aud.unit.secs.length - 1] + 1;
+    while (next < book.sections.length && !unitFor(next)) next++;
+    if (next >= book.sections.length) { stopAll(); return; }
+    renderSection(next); toast("Next: " + book.sections[next].title);
+    startAudio(null);
+  });
+  aud.el.addEventListener("error", () => { if (aud.on) toast("Could not load the audio – check your internet connection."); });
+
+  function findWord(ti, t) {   // last aligned word starting at or before (track, time)
+    const w = aud.align.w;
+    let lo = 0, hi = w.length - 1, ans = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (w[m][0] < ti || (w[m][0] === ti && w[m][1] <= t)) { ans = m; lo = m + 1; } else hi = m - 1;
+    }
+    return ans >= 0 ? w[ans] : null;
+  }
+  function tick() {
+    if (!aud.on) return;
+    aud.raf = requestAnimationFrame(tick);
+    if (!aud.unit.secs.includes(cur)) { stopAll(); return; }   // reader went to another chapter
+    if (aud.el.paused && aud.lastPid) return;
+    const t = aud.el.currentTime;
+    let pid, a = null, b = null;
+    if (aud.align) {
+      const w = findWord(aud.ti, t);
+      if (!w) return;
+      [, , pid, a, b] = w;
+    } else {
+      const wc = unitWords(aud.unit), f = estFrac(aud.unit, aud.ti, t) * wc.total;
+      const e = wc.list.find((x) => f >= x.start && f < x.start + x.n) || wc.list[wc.list.length - 1];
+      pid = e.pid;
+    }
+    // multi-chapter recordings: turn the page when the audio reaches the next chapter
+    let p = $("page").querySelector(`p[data-p="${pid}"]`);
+    if (!p) {
+      const sid = aud.unit.secs.find((s) => book.sections[s].paras.some((x) => x[0] === pid));
+      if (sid != null && sid !== cur) { renderSection(sid); p = $("page").querySelector(`p[data-p="${pid}"]`); }
+      if (!p) return;
+    }
+    if (pid !== aud.lastPid) {
+      aud.lastPid = pid;
+      showChunk(p, { a: 0, b: 0, who: null });
+      if (hl) hl.clear();
+      $("plWho").textContent = "🎧 " + (aud.unit.rec && aud.unit.rec.dramatic ? "Full cast" : "Human reader");
+      $("plWho").className = "who human";
+      db.last = { s: cur, p: pid }; save();
+    }
+    if (a != null) markWord(p, a, b);
+  }
+
+  // ---------- one player for both kinds of voices ----------
+  const mode = () => (aud.on ? "audio" : tts.on ? "tts" : null);
+  function stopAll() { stopAudio(); if (tts.on) stopReading(); else { clearShow(); $("player").hidden = true; document.body.classList.remove("playing"); } }
+  async function listen(fromP) {
+    hideFloat();
+    if (db.settings.source !== "tts") {
+      if (await startAudio(fromP)) return;
+      if (synth) toast("No human recording for this part – using computer voices");
+    }
+    if (synth) { stopAudio(); startReading(fromP); }
+    else toast("Sorry, this browser cannot read aloud.");
+    srcLabel();
+  }
+  function srcLabel() {
+    const human = mode() === "audio";
+    $("plSrc").textContent = human ? "🤖 Computer" : "🎧 Human";
+    $("plSrc").hidden = !human && !unitFor(cur);
+    $("plSrc").title = human ? "Switch to computer voices" : "Switch to the human audiobook";
+    $("plPrev").textContent = human ? "−10s" : "⏮"; $("plNext").textContent = human ? "+10s" : "⏭";
+    $("plPrev").title = human ? "Back 10 seconds" : "Previous paragraph"; $("plNext").title = human ? "Forward 10 seconds" : "Next paragraph";
+  }
+  $("btnListen").onclick = () => (mode() ? stopAll() : listen());
+  $("fRead").onclick = () => { const p = pending && pending.p; window.getSelection().removeAllRanges(); listen(p); };
+  $("plStop").onclick = stopAll;
+  $("plPlay").onclick = () => {
+    if (mode() === "audio") { if (aud.el.paused) aud.el.play(); else aud.el.pause(); }
+    else if (synth) togglePause();
+  };
+  $("plPrev").onclick = () => { if (mode() === "audio") aud.el.currentTime = Math.max(0, aud.el.currentTime - 10); else skip(-1); };
+  $("plNext").onclick = () => { if (mode() === "audio") aud.el.currentTime += 10; else skip(1); };
+  $("plRate").value = String(db.settings.rate);
+  $("plRate").addEventListener("change", () => { aud.el.playbackRate = +$("plRate").value; });
+  $("plSrc").onclick = () => {
+    const p = $("page").querySelector("p.reading") || visiblePara();
+    db.settings.source = mode() === "audio" ? "tts" : "audio"; save();
+    stopAll();
+    if (db.settings.source === "audio" && !unitFor(cur)) { toast("No human recording for this part"); db.settings.source = "tts"; save(); }
+    toast(db.settings.source === "audio" ? "🎧 Human voices" : "🤖 Computer voices");
+    listen(p);
+  };
+  loadAudioMap();
+  if (!synth && !("Audio" in window)) { $("btnListen").hidden = true; $("fRead").hidden = true; }
 
   // ---------- start ----------
   applySettings();
