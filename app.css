@@ -363,3 +363,5 @@ details.others summary { color: var(--accent); cursor: pointer; }
 .tr-sec p { margin: 4px 0 0; line-height: 1.55; font-family: var(--font); font-size: 16px; }
 .tr-words { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
 .dlg.tr .ask-quote { max-height: 30vh; overflow-y: auto; }
+/* translations: a font with full Vietnamese support */
+.tr-sent, .tr-sent p, .tr-vi, .rv-vi, .vi-wrap, .msg { font-family: "Segoe UI", Roboto, "Noto Sans", Arial, system-ui, sans-serif; }

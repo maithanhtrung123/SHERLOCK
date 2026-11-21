@@ -21,7 +21,8 @@
 
   // ---------- helpers ----------
   const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // NFC: some translators return Vietnamese with separate accent marks, which many fonts draw badly
+  const esc = (s) => String(s).normalize("NFC").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const fmtDate = (t) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   let toastTimer;
   function toast(msg) {
@@ -1461,7 +1462,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     if (!code) return "";
     try {
       const j = await getJSON(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${code}`);
-      return (j.responseData && j.responseData.translatedText) || "";
+      return ((j.responseData && j.responseData.translatedText) || "").normalize("NFC");
     } catch (e) { return ""; }
   }
   const aiReady = () => !!(db.settings.ai && db.settings.ai.key);
