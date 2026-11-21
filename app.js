@@ -1739,6 +1739,10 @@ ${showVi() ? `- a ${langName()} note in one line
   });
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    const hadSW = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    // a new version took over: reload once so the new app code is used right away
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadSW && !reloaded) { reloaded = true; location.reload(); } });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => r.update()).catch(() => {});
   }
 })();
