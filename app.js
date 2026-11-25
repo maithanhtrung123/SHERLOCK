@@ -1589,6 +1589,51 @@ ${showVi() ? `- a ${langName()} note in one line
     }
     return [...out];
   }
+  // ----- AI-made questions (harder, varied); basic questions are the fallback -----
+  rv.aiErr = "";
+  const QZ_TYPES = "meaning (what it means in the sentence), synonym (closest meaning), usage (which new sentence uses it correctly), fill (complete a NEW sentence), collocation (which word naturally goes with it), opposite";
+  function prepAI() {
+    if (!aiReady() || rv.aiBusy) return;
+    const cards = rv.queue.slice(rv.i, rv.i + 10).filter((c) => (c.kind === "mc" || c.kind === "fill") && !c.aiq && !c.aiFail).slice(0, 6);
+    if (!cards.length) return;
+    const items = cards.map((c, k) => ({ id: k, word: c.v.word, sentence: c.v.sentence, meaning: meaningOf(c.v), pos: c.v.pos || "", seen: srsOf(c.v).reps + srsOf(c.v).lapses }));
+    rv.aiBusy = true;
+    const p = askAI(`You write vocabulary review questions for an upper-intermediate English learner reading Sherlock Holmes.
+For EACH item make ONE multiple-choice question. Vary the type across items (and use a different type when "seen" is higher). Types: ${QZ_TYPES}.
+Make it genuinely hard to guess:
+- 4 options, all the same part of speech, similar length and style, all plausible at first sight.
+- Distractors are near-synonyms with a different nuance, words that look/sound similar, or meanings that fit the topic but not this sentence. Never silly or unrelated options.
+- Do not copy the learner's saved meaning word-for-word; paraphrase.
+- Exactly one option is clearly correct.
+Items: ${JSON.stringify(items)}
+Reply with JSON only: {"questions": [{"id": 0, "type": "meaning", "prompt": "short question in English", "text": "a sentence to show (use ___ for a blank), or empty", "options": ["", "", "", ""], "answer": 0, "explain": "one short sentence why the answer is right and the closest distractor is wrong"}]}`, true);
+    cards.forEach((c) => { c.aiPending = p; });
+    p.then((r) => {
+      const qs = (r && r.questions) || [];
+      cards.forEach((c, k) => {
+        const q = qs.find((x) => +x.id === k);
+        const opts = q && Array.isArray(q.options) ? q.options.map((o) => String(o).trim()) : [];
+        if (q && opts.length >= 3 && new Set(opts).size === opts.length && opts[q.answer] !== undefined) { const right = opts[q.answer]; const sh = shuffle(opts.slice()); c.aiq = { ...q, options: sh, answer: sh.indexOf(right) }; }
+        else c.aiFail = true;
+        delete c.aiPending;
+      });
+      rv.aiErr = "";
+    }).catch((e) => {
+      rv.aiErr = e.message || "network error";
+      cards.forEach((c) => { c.aiFail = true; delete c.aiPending; });
+    }).finally(() => {
+      rv.aiBusy = false;
+      const c = rv.queue[rv.i];
+      if ($("dlgReview").open && c && cards.includes(c) && !rv.answered) showCard();
+      prepAI();
+    });
+  }
+  function aiNotice() {
+    if (!aiReady()) return `<div class="ai-note">⚠ Basic questions: API key missing. <button class="link" data-ai-setup>✨ Set up AI helper</button> for harder questions made by AI.</div>`;
+    if (rv.aiErr) return `<div class="ai-note">⚠ Basic questions: can't reach the AI (${esc(rv.aiErr)}). <button class="link" data-ai-setup>Check the key</button></div>`;
+    return "";
+  }
+  const QZ_LABEL = { meaning: "What does it mean here?", synonym: "Closest meaning", usage: "Which sentence uses it correctly?", fill: "Complete the sentence", collocation: "Which goes with it?", opposite: "Opposite meaning" };
   function quizType(v) {
     const s = srsOf(v), has = !!meaningOf(v);
     const order = has ? ["mc", "fill", "type"] : ["fill"];
@@ -1597,7 +1642,7 @@ ${showVi() ? `- a ${langName()} note in one line
   function startSession() {
     const learn = toLearn(), due = dueList();
     rv.queue = [...shuffle(due.slice(0, 200)).map((v) => ({ v, kind: quizType(v) })), ...learn.map((v) => ({ v, kind: "learn" }))];
-    rv.i = 0; rv.done = 0;
+    rv.i = 0; rv.done = 0; rv.aiErr = "";
     learn.forEach((v) => enrich(v).then(() => { const c = rv.queue[rv.i]; if (c && c.v === v && c.kind === "learn") showCard(); }));
   }
   function openReview() {
@@ -1655,11 +1700,30 @@ ${showVi() ? `- a ${langName()} note in one line
       return;
     }
     const m = meaningOf(v);
+    if ((c.kind === "mc" || c.kind === "fill") && aiReady() && !c.aiFail) {
+      if (!c.aiq) {
+        prepAI();
+        body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 Review</div><p class="hint">✨ AI is writing a question for “${esc(v.word)}”…</p></div>`;
+        $("rvActions").innerHTML = `<button class="btn" data-ai-basic>Use a basic question</button>`;
+        return;
+      }
+      const q = c.aiq;
+      c.answer = q.options[q.answer];
+      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 ${esc(QZ_LABEL[q.type] || "Question")} <span class="tag">AI</span></div>
+        ${q.type === "fill" ? "" : `<div class="rv-word">${esc(v.word)} ${say(v.word)}</div>`}
+        <p class="rv-q">${esc(q.prompt || "")}</p>
+        ${q.text ? `<blockquote>${esc(q.text).replace(/_{2,}/g, '<span class="blank">______</span>')}</blockquote>` : ""}
+        <div class="opts">${q.options.map((o, i) => `<button class="opt" data-opt="${esc(o)}"><b>${"ABCD"[i]}</b> ${esc(o)}</button>`).join("")}</div></div>`;
+      $("rvActions").innerHTML = "";
+      prepAI();
+      return;
+    }
+    const note = (c.kind === "mc" || c.kind === "fill") ? aiNotice() : "";
     if (c.kind === "mc") {
       const others = shuffle(db.vocab.filter((x) => x !== v && meaningOf(x) && meaningOf(x) !== m).map(meaningOf));
       const opts = shuffle([m, ...[...others, ...shuffle(DISTRACT_DEFS.slice())].slice(0, 2)]);
       c.answer = m;
-      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 What does it mean here?</div>
+      body.innerHTML = `${note}<div class="rv-card"><div class="rv-tag">🧠 What does it mean here?</div>
         <div class="rv-word">${esc(v.word)} ${say(v.word)}</div>
         <blockquote>${highlight(v.sentence, v.word)}</blockquote>
         <div class="opts">${opts.map((o, i) => `<button class="opt" data-opt="${esc(o)}"><b>${"ABC"[i]}</b> ${esc(o)}</button>`).join("")}</div></div>`;
@@ -1670,7 +1734,7 @@ ${showVi() ? `- a ${langName()} note in one line
       const pool = [...others, ...bookWords(4, v.word.length, avoid)].filter((w, i, a) => a.indexOf(w) === i && w.toLowerCase() !== lw);
       const opts = shuffle([v.word, ...pool.slice(0, 2)]);
       c.answer = v.word;
-      body.innerHTML = `<div class="rv-card"><div class="rv-tag">🧠 Choose the missing word</div>
+      body.innerHTML = `${note}<div class="rv-card"><div class="rv-tag">🧠 Choose the missing word</div>
         <p class="rv-q">${cloze(v.sentence, v.word)}</p>
         ${m ? `<p class="hint">Hint: ${esc(m)}</p>` : ""}
         <div class="opts">${opts.map((o, i) => `<button class="opt" data-opt="${esc(o)}"><b>${"ABC"[i]}</b> ${esc(o)}</button>`).join("")}</div></div>`;
@@ -1695,7 +1759,7 @@ ${showVi() ? `- a ${langName()} note in one line
   function answer(given) {
     const c = rv.queue[rv.i]; if (!c || rv.answered) return;
     rv.answered = true;
-    const v = c.v, ok = norm(given) === norm(c.answer);
+    const v = c.v, ok = c.aiq ? given === c.answer : norm(given) === norm(c.answer);
     $("rvBody").querySelectorAll(".opt").forEach((b) => {
       b.disabled = true;
       if (b.dataset.opt === c.answer) b.classList.add("right");
@@ -1707,7 +1771,8 @@ ${showVi() ? `- a ${langName()} note in one line
     const s = srsOf(v);
     const fb = document.createElement("div");
     fb.className = "fb " + (ok ? "ok" : "no");
-    fb.innerHTML = (ok ? `✅ Correct! You will see it ${ivlText(s.ivl)}.` : `❌ Not quite. The answer is <b>${esc(v.word)}</b>${c.kind === "type" && given.trim() ? ` (you wrote “${esc(given)}”)` : ""}.`) +
+    fb.innerHTML = (ok ? `✅ Correct! You will see it ${ivlText(s.ivl)}.` : `❌ Not quite. The answer is <b>${esc(c.aiq ? c.answer : v.word)}</b>${c.kind === "type" && given.trim() ? ` (you wrote “${esc(given)}”)` : ""}.`) +
+      (c.aiq && c.aiq.explain ? `<div class="rv-ex">💡 ${esc(c.aiq.explain)}</div>` : "") +
       `<blockquote>${highlight(v.sentence, v.word)} ${say(v.sentence)}</blockquote>` +
       (meaningOf(v) ? `<div class="rv-mean"><b>Meaning:</b> ${esc(meaningOf(v))}</div>` : "") + viLine(v.vi) +
       (!ok && aiReady() ? `<button class="btn small" data-ai-feedback="${esc(given)}">✨ Ask AI why</button><div class="ai-out" id="aiOut"></div>` : "");
@@ -1756,6 +1821,7 @@ ${showVi() ? `- a ${langName()} note in one line
       save(); rv.done++; rv.i++; showCard(); updateReviewBadge();
     } else if (t.matches("[data-skip]")) { rv.i++; showCard(); }
     else if (t.matches("[data-plan]")) openPlan();
+    else if (t.matches("[data-ai-basic]")) { c.aiFail = true; showCard(); }
     else if (t.matches("[data-learn-now]")) {
       extraToday = true;
       const more = waitingNew().filter((x) => !rv.queue.some((c) => c.v === x)).slice(0, 10);
@@ -1845,7 +1911,10 @@ ${showVi() ? `- a ${langName()} note in one line
   $("dlgAI").addEventListener("close", () => { if ($("dlgTr").open && tr && tr.para && aiReady()) translatePara($("page").querySelector(`p[data-p="${tr.p}"]`));
     else if ($("dlgTr").open && tr && tr.info && aiReady() && tr.info.meaningSrc !== "ai") lookupTr(tr);
     else if ($("dlgAsk").open && aiReady() && !ask.msgs.length) { $("askLog").innerHTML = ""; $("askInput").focus(); } });
-  $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && rv.queue[rv.i].kind === "learn") showCard(); });
+  $("dlgAI").addEventListener("close", () => { if ($("dlgReview").open && rv.queue[rv.i] && !rv.answered) {
+    if (aiReady()) { rv.aiErr = ""; rv.queue.slice(rv.i).forEach((c) => { delete c.aiFail; }); }
+    showCard();
+  } });
   $("aiProvider").onchange = () => { $("aiModel").placeholder = AI_DEFAULT_MODEL[$("aiProvider").value]; };
   $("btnAISetup").onclick = openAISetup;
   $("aiSave").onclick = async () => {
