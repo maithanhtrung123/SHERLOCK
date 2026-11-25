@@ -16,7 +16,7 @@
   try { db = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || "{}")); }
   catch (e) { db = Object.assign({}, defaults); }
   db.settings = Object.assign({}, defaults.settings, db.settings);
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast("Could not save – storage is full or blocked."); } };
+  let save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast("Could not save – storage is full or blocked."); } };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
   // ---------- helpers ----------
@@ -662,6 +662,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     if (e.target.matches("[data-go]")) { closePanels(); renderSection(v.s, v.p, true); }
     if (e.target.matches("[data-del]")) {
       if (!confirmDelete(item)) return;
+      db.deletedIds = db.deletedIds || []; db.deletedIds.push(v.id);
       db.vocab = db.vocab.filter((x) => x.id !== v.id); save(); updateCount(); buildVocab(); markVocab();
       if (v.s === cur) renderSection(cur, visiblePara() && +visiblePara().dataset.p);
     }
@@ -677,7 +678,7 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
   $("vList").addEventListener("change", (e) => {
     if (!e.target.matches("[data-note]")) return;
     const v = db.vocab.find((x) => x.id === e.target.closest(".v-item").dataset.id);
-    if (v) { v.note = e.target.value.trim(); save(); }
+    if (v) { v.note = e.target.value.trim(); v.noteAt = Date.now(); save(); }
   });
 
   function exportItems() {
@@ -792,9 +793,14 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
   document.querySelectorAll("[data-open-progress]").forEach((b) => (b.onclick = () => openPanel("panelProgress")));
   $("btnProgress").onclick = () => openPanel("panelProgress");
 
-  $("btnExportAll").onclick = () => {
+  function backupData() {
     const out = Object.assign({ app: "Sherlock Reader", kind: "learning-progress", version: 1, exportedAt: new Date().toISOString() }, db);
     out.settings = Object.assign({}, db.settings, { ai: undefined });   // your AI key stays on this device
+    out.vocab = db.vocab.map((v) => { const c = Object.assign({}, v); delete c._busy; return c; });
+    return out;
+  }
+  $("btnExportAll").onclick = () => {
+    const out = backupData();
     download(`sherlock-learning-${stamp()}.json`, JSON.stringify(out, null, 1), "application/json");
     toast("Saved – keep this file to continue later or on another device");
   };
@@ -817,12 +823,16 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
 
   // Import merges: nothing already here is deleted.
   function mergeData(data) {
+    const gone = new Set([...(db.deletedIds || []), ...(data.deletedIds || [])]);
+    db.deletedIds = [...gone];
+    db.vocab = db.vocab.filter((v) => !gone.has(v.id));
     const byId = new Map(db.vocab.map((v) => [v.id, v]));
     let added = 0;
     data.vocab.forEach((v) => {
+      if (gone.has(v.id)) return;
       const mine = byId.get(v.id);
       if (!mine) { db.vocab.push(v); added++; return; }
-      if (!mine.note && v.note) mine.note = v.note;
+      if (v.note && (!mine.note || (v.noteAt || 0) > (mine.noteAt || 0))) { mine.note = v.note; mine.noteAt = v.noteAt; }
       ["meaning", "vi", "pos", "example", "tip", "defs", "ipa", "meaningSrc"].forEach((k) => { if (!mine[k] && v[k]) mine[k] = v[k]; });
       if (v.learned) mine.learned = true;
       const a = mine.srs, b = v.srs;          // keep the review schedule that is further along
@@ -855,6 +865,128 @@ Answer clearly and briefly for a learner (under 150 words unless I ask for more)
     } catch (err) { toast("That file is not a Sherlock Reader progress file"); }
     e.target.value = "";
   };
+
+  // ---------- sync with the person's own Google Drive (hidden app folder) ----------
+  // Needs a Google OAuth "Web application" client ID (see README). Data goes only between this browser and the person's Drive.
+  const sync = { token: null, exp: 0, fileId: null, busy: false, timer: null, lastErr: "" };
+  db.settings.sync = db.settings.sync || { clientId: "", on: false, last: 0 };
+  try { const t = JSON.parse(localStorage.getItem("sherlock-sync-token") || "null"); if (t && t.exp > Date.now() + 60000) Object.assign(sync, t); } catch (e) {}
+  const SYNC_FILE = "sherlock-learning.json", DRIVE = "https://www.googleapis.com";
+  function loadGIS() {
+    if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+    return new Promise((ok, no) => {
+      const sc = document.createElement("script");
+      sc.src = "https://accounts.google.com/gsi/client"; sc.async = true;
+      sc.onload = () => ok(); sc.onerror = () => no(new Error("can't load Google sign-in (offline?)"));
+      document.head.appendChild(sc);
+    });
+  }
+  // interactive=true only from a tap (browsers block pop-ups otherwise)
+  async function getToken(interactive) {
+    if (sync.token && sync.exp > Date.now() + 60000) return sync.token;
+    const cid = db.settings.sync.clientId;
+    if (!cid) throw new Error("no Google client ID yet");
+    if (!interactive) throw new Error("sign-in needed");
+    await loadGIS();
+    return new Promise((ok, no) => {
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: cid, scope: "https://www.googleapis.com/auth/drive.appdata",
+        callback: (r) => {
+          if (r.error) return no(new Error(r.error_description || r.error));
+          sync.token = r.access_token; sync.exp = Date.now() + (r.expires_in || 3600) * 1000;
+          localStorage.setItem("sherlock-sync-token", JSON.stringify({ token: sync.token, exp: sync.exp }));
+          ok(sync.token);
+        },
+        error_callback: (e) => no(new Error(e && e.type === "popup_closed" ? "sign-in window was closed" : (e && e.message) || "sign-in failed")),
+      });
+      tc.requestAccessToken({ prompt: db.settings.sync.on ? "" : "consent" });
+    });
+  }
+  async function drive(path, opts = {}) {
+    const r = await fetch(DRIVE + path, Object.assign({}, opts, { headers: Object.assign({ Authorization: "Bearer " + sync.token }, opts.headers || {}) }));
+    if (r.status === 401) { sync.token = null; localStorage.removeItem("sherlock-sync-token"); throw new Error("sign-in needed"); }
+    if (!r.ok) throw new Error("Google Drive error " + r.status);
+    return r;
+  }
+  async function syncNow(interactive) {
+    if (sync.busy) return;
+    sync.busy = true; syncUI("Syncing…");
+    try {
+      await getToken(interactive);
+      if (!sync.fileId) {
+        const j = await (await drive(`/drive/v3/files?spaces=appDataFolder&fields=files(id,modifiedTime)&q=${encodeURIComponent(`name='${SYNC_FILE}'`)}`)).json();
+        sync.fileId = j.files && j.files[0] ? j.files[0].id : null;
+      }
+      let added = 0;
+      if (sync.fileId) {
+        const remote = await (await drive(`/drive/v3/files/${sync.fileId}?alt=media`)).json();
+        if (remote && Array.isArray(remote.vocab)) added = mergeData(remote);
+      }
+      save();
+      const body = JSON.stringify(backupData());
+      if (sync.fileId) await drive(`/upload/drive/v3/files/${sync.fileId}?uploadType=media`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body });
+      else {
+        const meta = { name: SYNC_FILE, parents: ["appDataFolder"], mimeType: "application/json" };
+        const fd = new FormData();
+        fd.append("metadata", new Blob([JSON.stringify(meta)], { type: "application/json" }));
+        fd.append("file", new Blob([body], { type: "application/json" }));
+        sync.fileId = (await (await drive("/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", body: fd })).json()).id;
+      }
+      db.settings.sync.on = true; db.settings.sync.last = Date.now(); sync.lastErr = ""; save();
+      if (added) {
+        updateCount(); markVocab(); updateReviewBadge(); updateStatus();
+        if (!$("panelProgress").hidden) buildProgress();
+        toast(`☁ Synced – ${added} ${added === 1 ? "word" : "words"} from your other devices`);
+      }
+    } catch (e) {
+      sync.lastErr = e.message;
+      if (interactive) toast("☁ Sync: " + e.message);
+    } finally { sync.busy = false; syncUI(); }
+  }
+  function syncUI(msg) {
+    const s = db.settings.sync, el = $("syncStatus");
+    const txt = msg || (sync.lastErr === "sign-in needed" && s.on ? "Tap “Sync now” to sign in again"
+      : sync.lastErr ? "Not synced: " + sync.lastErr
+      : s.on ? "On · last synced " + (s.last ? new Date(s.last).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "never")
+      : "Off");
+    if (el) el.textContent = txt;
+    const needTap = s.on && !msg && sync.lastErr === "sign-in needed";
+    $("syncChip").hidden = !(needTap || (msg && s.on));
+    $("syncChip").textContent = msg ? "☁ " + msg : "☁ Tap to sync";
+    if ($("btnSyncOff")) $("btnSyncOff").hidden = !s.on;
+    $("btnSync").textContent = s.on ? "☁ Sync now" : "☁ Turn on Google Drive sync";
+  }
+  // after any change: sync a little later (only while signed in; no pop-ups)
+  const save0 = save;
+  save = function () {
+    save0();
+    if (!db.settings.sync || !db.settings.sync.on || sync.busy) return;
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(() => { if (sync.token && sync.exp > Date.now() + 60000) syncNow(false); }, 15000);
+  };
+  $("btnSync").onclick = () => {
+    if (!db.settings.sync.clientId) { openSyncSetup(); return; }
+    syncNow(true);
+  };
+  function openSyncSetup() { $("syncCid").value = db.settings.sync.clientId || ""; $("syncOrigin").textContent = location.origin; $("dlgSync").showModal(); }
+  $("btnSyncSetup").onclick = openSyncSetup;
+  $("syncChip").onclick = () => syncNow(true);
+  $("syncConnect").onclick = () => {
+    const cid = $("syncCid").value.trim();
+    if (!/\.apps\.googleusercontent\.com$/.test(cid)) { $("syncMsg").textContent = "That doesn't look like a Google client ID (it ends with .apps.googleusercontent.com)."; return; }
+    db.settings.sync.clientId = cid; save();
+    $("dlgSync").close();
+    syncNow(true);
+  };
+  $("btnSyncOff").onclick = () => {
+    db.settings.sync.on = false; save();
+    if (sync.token && window.google && google.accounts) try { google.accounts.oauth2.revoke(sync.token); } catch (e) {}
+    sync.token = null; sync.fileId = null; localStorage.removeItem("sherlock-sync-token");
+    syncUI(); toast("Google Drive sync turned off on this device");
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && db.settings.sync.on && sync.token && sync.exp > Date.now()) { clearTimeout(sync.timer); syncNow(false); } });
+  syncUI();
+  if (db.settings.sync.on) setTimeout(() => syncNow(false), 1500);
 
   // ---------- appearance ----------
   function applySettings() {
@@ -1843,7 +1975,7 @@ Reply with JSON only: {"questions": [{"id": 0, "type": "meaning", "prompt": "sho
   });
   $("dlgReview").addEventListener("change", (e) => {
     if (!e.target.matches("[data-rv-note]")) return;
-    const c = rv.queue[rv.i]; if (c) { c.v.note = e.target.value.trim(); save(); }
+    const c = rv.queue[rv.i]; if (c) { c.v.note = e.target.value.trim(); c.v.noteAt = Date.now(); save(); }
   });
   document.addEventListener("keydown", (e) => {
     if (!$("dlgReview").open || e.target.closest("input")) return;

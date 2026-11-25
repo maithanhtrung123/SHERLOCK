@@ -98,6 +98,11 @@
   <div class="phead"><h2>My progress</h2><button class="x" data-close>×</button></div>
   <div id="progBody" class="pbody"></div>
   <div class="vfoot prog-foot">
+    <div class="sync-box">
+      <div><b>☁ Sync between my devices</b> <span class="hint" id="syncStatus"></span></div>
+      <div class="sync-row"><button id="btnSync" class="btn primary">☁ Turn on Google Drive sync</button><button id="btnSyncSetup" class="link">Google setup</button><button id="btnSyncOff" class="link" hidden>Turn off</button></div>
+      <p class="hint">Saves your words, review schedule, bookmarks and reading position in a hidden app folder in <b>your own</b> Google Drive, and merges them on every device where you turn this on. Your AI key is not synced.</p>
+    </div>
     <button id="btnExportAll" class="btn primary">⬇ Export my learning (.json)</button>
     <label class="btn">⬆ Import to continue<input type="file" id="fileImport" accept=".json,application/json" hidden></label>
     <button id="btnReport" class="btn">📝 Progress report (.md)</button>
@@ -210,6 +215,19 @@
     <button class="btn primary" id="askSend">Send</button>
   </form>
   <div class="ask-foot"><button type="button" class="link" id="askSaveWord">＋ Save this as a word</button></div>
+</dialog>
+
+<button id="syncChip" class="sync-chip" hidden>☁ Tap to sync</button>
+
+<dialog id="dlgSync" class="dlg">
+  <form method="dialog">
+    <h3>☁ Google Drive sync – setup</h3>
+    <p class="hint">Google needs a free “client ID” that says this app may use a hidden folder in your Drive. You make it once (about 5 minutes) and paste it here – on each device, use the same ID.</p>
+    <p class="hint">In Google Cloud Console → <i>APIs &amp; Services → Credentials → Create credentials → OAuth client ID → Web application</i>, add this under <b>Authorized JavaScript origins</b>: <code id="syncOrigin"></code></p>
+    <label>Google client ID<input id="syncCid" autocomplete="off" placeholder="….apps.googleusercontent.com"></label>
+    <p id="syncMsg" class="hint"></p>
+    <div class="row"><button value="cancel" class="btn" formnovalidate>Close</button><button type="button" class="btn primary" id="syncConnect">Save &amp; sign in with Google</button></div>
+  </form>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>

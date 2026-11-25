@@ -32,3 +32,16 @@ Works offline after the first visit, and can be added to the phone home screen (
 python3 -m http.server 8000
 ```
 then open http://localhost:8000.
+
+## Sync between devices (Google Drive)
+
+*My progress → ☁ Turn on Google Drive sync* keeps one file in the hidden app folder of **your own** Google Drive and merges it on every device (words, review schedule, notes, bookmarks, reading position, deleted words). The AI key is never synced. It works on the web version (https://maithanhtrung123.github.io/SHERLOCK/), not on the offline single file.
+
+One-time setup of a Google client ID:
+1. Open https://console.cloud.google.com/ and create a project (any name).
+2. *APIs & Services → Library*: enable **Google Drive API**.
+3. *APIs & Services → OAuth consent screen*: choose **External**, fill in an app name and your email; under *Test users* add your own Gmail address.
+4. *APIs & Services → Credentials → Create credentials → OAuth client ID*, type **Web application**. Under *Authorized JavaScript origins* add `https://maithanhtrung123.github.io`.
+5. Copy the client ID (ends with `.apps.googleusercontent.com`) and paste it in the app (*Google setup*). Use the same ID on every device.
+
+Google signs you out after about an hour; when that happens a small "☁ Tap to sync" button appears.
